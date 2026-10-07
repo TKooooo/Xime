@@ -1,0 +1,68 @@
+<Project>
+
+  <!--
+    ============================================================
+     ObjectARX SDK 位置解析（全仓库共用）
+
+     背景：原先 SdkRoot 的默认值被**硬编码**成开发机上的一个绝对路径
+           （C:\Users\XJH\WorkBuddy\2026-09-30-21-08-09\ObjectARX-SDK），
+           那个目录属于另一次工作会话，随时可能被清理；别人 clone 下来
+           也必然编不过。现在改为**可配置 + 有明确报错**。
+
+     解析优先级（先命中者胜）：
+       ① 命令行       dotnet build -p:SdkRoot="D:\ObjectARX-SDK"
+       ② 本地文件     local.props（不进版本库；模板见 local.props.example）
+       ③ 环境变量     set ACAD_SDK_ROOT=D:\ObjectARX-SDK
+       ④ 默认位置     本仓库同级的 ../ObjectARX-SDK
+
+     需要的目录布局（ObjectARX SDK 版权归 Autodesk，不可随仓库分发）：
+       <SdkRoot>/2010-R18.0/inc-x64   AutoCAD 2010-2012 的 AcMgd / AcDbMgd
+       <SdkRoot>/2014-R19.1/inc       AutoCAD 2013-2024 的 AcCoreMgd / AcMgd / AcDbMgd
+                                      （net8.0-windows 复用这一份）
+    ============================================================
+  -->
+
+  <!--
+    ② 本地覆盖文件。**排在环境变量与默认值之前**，所以它能压过默认值；
+       而命令行 -p:SdkRoot 已在属性表里，优先级仍然最高。
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)local.props')" />
+
+  <PropertyGroup>
+    <!-- ③ 环境变量 -->
+    <SdkRoot Condition="'$(SdkRoot)' == '' and '$(ACAD_SDK_ROOT)' != ''">$(ACAD_SDK_ROOT)</SdkRoot>
+    <!-- ④ 默认：仓库同级的 ObjectARX-SDK -->
+    <SdkRoot Condition="'$(SdkRoot)' == ''">$(MSBuildThisFileDirectory)..\ObjectARX-SDK</SdkRoot>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Acad35RefDir Condition="'$(Acad35RefDir)' == ''">$(SdkRoot)\2010-R18.0\inc-x64</Acad35RefDir>
+    <Acad48RefDir Condition="'$(Acad48RefDir)' == ''">$(SdkRoot)\2014-R19.1\inc</Acad48RefDir>
+    <Acad8RefDir  Condition="'$(Acad8RefDir)'  == ''">$(Acad48RefDir)</Acad8RefDir>
+  </PropertyGroup>
+
+  <!--
+    ★ 落空时报一条**人话**错误，而不是丢出几百行 CS0246。
+      条件挂在 XimeNeedsAcadSdk 上：只有真正引用 SDK 的项目（Xime.Acad）才校验，
+      Xime.CliTest / Xime.Core 不需要 SDK，不该被牵连。
+  -->
+  <Target Name="XimeValidateAcadSdk"
+          BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(XimeNeedsAcadSdk)' == 'true'">
+
+    <Error Condition="!Exists('$(SdkRoot)')"
+           Text="找不到 ObjectARX SDK 目录：$(SdkRoot)&#10;请任选一种方式指定（完整说明见仓库根 local.props.example）：&#10;  ① dotnet build -p:SdkRoot=&quot;D:\ObjectARX-SDK&quot;&#10;  ② 在仓库根放一个 local.props（不进版本库）&#10;  ③ 设置环境变量 ACAD_SDK_ROOT&#10;  ④ 把 ObjectARX-SDK 目录放到本仓库的同级位置" />
+
+    <Error Condition="'$(TargetFramework)' == 'net35' and !Exists('$(Acad35RefDir)')"
+           Text="net35 的引用目录不存在：$(Acad35RefDir)&#10;需要 ObjectARX SDK 的 2010-R18.0\inc-x64（AutoCAD 2010-2012）。" />
+
+    <Error Condition="'$(TargetFramework)' == 'net48' and !Exists('$(Acad48RefDir)')"
+           Text="net48 的引用目录不存在：$(Acad48RefDir)&#10;需要 ObjectARX SDK 的 2014-R19.1\inc（AutoCAD 2013-2024）。" />
+
+    <Error Condition="'$(TargetFramework)' == 'net8.0-windows' and !Exists('$(Acad8RefDir)')"
+           Text="net8.0-windows 的引用目录不存在：$(Acad8RefDir)&#10;本项目 net8 复用 2014-R19.1\inc 的引用程序集。" />
+
+  </Target>
+
+</Project>

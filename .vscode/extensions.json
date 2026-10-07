@@ -1,0 +1,10 @@
+{
+  // 打开这个工作区时 VS Code 会提示安装下面这些扩展。
+  "recommendations": [
+    // C# 语言服务 + 解决方案资源管理器（三个工程都在 Xime.sln 里）
+    "ms-dotnettools.csdevkit",
+    "ms-dotnettools.csharp",
+    // build/*.ps1 用得到
+    "ms-vscode.powershell"
+  ]
+}

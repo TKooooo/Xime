@@ -1,0 +1,60 @@
+{
+  // ============================================================
+  //  X输入法 —— 工作区设置
+  //  这个文件会进版本库，所以只放"对任何机器都成立"的东西；
+  //  与机器相关的路径一律不进这里（SDK 位置走仓库根 local.props）。
+  // ============================================================
+
+  // C# Dev Kit 靠它装载三个工程（Xime.Core / Xime.Acad / Xime.CliTest）
+  "dotnet.defaultSolution": "Xime.sln",
+
+  // ---- 把构建产物从资源管理器与全局搜索里藏掉 ----------------
+  // 三个工程的产物分别落在 build/acad、build/core、dist 和各自 bin/obj
+  // （见各 csproj 的 BaseOutputPath），不排除的话搜索会被 DLL 淹没。
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "build/acad": true,
+    "build/core": true,
+    "build/shots": true,
+    "build/ApplicationPlugins": true,
+    "dist": true
+  },
+  "search.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "build/acad": true,
+    "build/core": true,
+    "build/shots": true,
+    "dist": true
+  },
+
+  // ---- 编码与行尾：**故意什么都不写** ------------------------
+  // 仓库里的文件 BOM 是混着的（XimeEngine.cs 带 BOM，XimeCommands.cs 不带），
+  // 行尾则清一色 LF。一旦在这里写死 files.encoding / files.eol，
+  // 就会出现"刚打开某个文件就被判定已修改"——让 VS Code 自己按文件检测即可。
+
+  // 这个项目靠人工对齐的注释排版，自动去尾空格 / 补末行会制造无意义 diff
+  "files.trimTrailingWhitespace": false,
+  "files.insertFinalNewline": false,
+
+  // ---- 缩进：全部源码是 4 空格 ---------------------------------
+  "[csharp]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "[python]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+
+  // ---- 文件类型关联 -------------------------------------------
+  // .lsp 是 AutoCAD 的 AutoLISP；.scr / .pc3 等按纯文本处理
+  "files.associations": {
+    "*.lsp": "lisp",
+    "*.scr": "plaintext"
+  },
+
+  // ---- 终端：build.sh 是 bash 脚本，默认给个 bash ---------------
+  "terminal.integrated.defaultProfile.windows": "Git Bash"
+}

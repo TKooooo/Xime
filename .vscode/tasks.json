@@ -1,0 +1,113 @@
+{
+  // ============================================================
+  //  X输入法 —— 构建 / 验证 / 部署任务
+  //
+  //  按 Ctrl+Shift+B 会直接跑默认任务（完整构建）。
+  //  其余任务：Ctrl+Shift+P → "Tasks: Run Task"。
+  //
+  //  ★ dotnet / python / bash 都直接用命令名（这台机器上都在 PATH 上）。
+  //    换机器若某个不在 PATH，建议把它加进 PATH，而不是改这里 ——
+  //    改了这里会把本机路径写进版本库。
+  //  ★ ObjectARX SDK 的位置**不在这里**配，见仓库根 local.props。
+  // ============================================================
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // ---- 主构建：编译三套 TFM + 打包 + 生成安装说明 ----------------
+      "label": "构建：完整构建并打包（build/build.sh）",
+      "detail": "编译 net35/net48/net8 三套目标框架，复制到 dist/，生成安装说明与 ApplicationPlugins 包。等价于 bash build/build.sh",
+      "type": "shell",
+      "command": "bash build/build.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$msCompile",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "构建：清理全部产物（build/build.sh clean）",
+      "detail": "删除 dist/、build/acad/、build/core/",
+      "type": "shell",
+      "command": "bash build/build.sh clean",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      // ★ 只给"附加到 acad.exe 打断点"用。产物落在 build/acad/Debug/<tfm>/，
+      //   **不会**碰 dist/ 与 build/acad/Release/，所以不会影响交付一致性。
+      "label": "调试：编译 Xime.Acad（Debug，产 PDB）",
+      "detail": "Release 故意不产 PDB（DebugType=none，见 Xime.Acad.csproj），断点调试必须走 Debug 配置。",
+      "type": "shell",
+      "command": "dotnet build src/Xime.Acad/Xime.Acad.csproj -c Debug --nologo",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$msCompile"
+    },
+
+    {
+      // ---- 验证链：与项目既定的四步验证方法论一一对应 ----------------
+      "label": "验证①：编译 CliTest（XimeTest.exe）",
+      "detail": "★ build.sh 不编 CliTest，必须单独编。跑回归前一定要先跑这个，否则测的是旧 exe。",
+      "type": "shell",
+      "command": "dotnet build src/Xime.CliTest/Xime.CliTest.csproj -c Release --nologo",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "验证②：核心回归 XimeTest config（基线 301 / 0）",
+      "detail": "纯判据全量回归。建议连跑 2 轮再下结论。",
+      "type": "shell",
+      "command": "./src/Xime.CliTest/bin/Release/net48/XimeTest.exe config",
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": "验证①：编译 CliTest（XimeTest.exe）",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "验证③：交付自查 check_v102.py（特征串正/反两面）",
+      "detail": "检查 dist/ 产物、版本资源、关键特征串。",
+      "type": "shell",
+      "command": "python build/check_v102.py",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "验证④：负向对照 _negctl_v102.py all（16 项）",
+      "detail": "★ 故意逐项改坏源码，确认每条断言都恰好变红。会改源码再还原，跑完请核对 git status 干净。",
+      "type": "shell",
+      "command": "python build/_negctl_v102.py all",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "验证⑤：还原全部负向对照注入（_negctl_v102.py restore）",
+      "detail": "负向对照中途失败时用它兜底还原源码。",
+      "type": "shell",
+      "command": "python build/_negctl_v102.py restore",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+
+    {
+      // ---- 部署 ----------------------------------------------------
+      "label": "部署：deploy_v102.py（桌面交付目录 + 安装目录）",
+      "detail": "把 dist/net48 部署到桌面交付目录与 C:/X输入法/net48，并保留用户 140 条白名单。落盘前会自检 XML 合法性。",
+      "type": "shell",
+      "command": "python build/deploy_v102.py",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+
+    {
+      // ---- 界面预览 -------------------------------------------------
+      "label": "预览：设置界面截图（XimeTest ui --shot）",
+      "detail": "改过界面文案后跑它，看新截图有没有裁切。输出到 build/ui_preview_v102.png。",
+      "type": "shell",
+      "command": "./src/Xime.CliTest/bin/Release/net48/XimeTest.exe ui --shot build/ui_preview_v102.png",
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": "验证①：编译 CliTest（XimeTest.exe）",
+      "problemMatcher": []
+    }
+  ]
+}

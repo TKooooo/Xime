@@ -1,0 +1,58 @@
+# ============================================================
+#  X输入法 —— 版本库忽略规则
+#
+#  原则：**源码、构建脚本、资源、文档进库；一切可再生成的产物不进库。**
+#  与作者另一个仓库 batchPrintZWCAD 的惯例保持一致（bin/ obj/ dist/ 均忽略）。
+#  要发布二进制请走 GitHub Releases，不要把 DLL 提交进源码树。
+# ============================================================
+
+# ---------- 本机专属配置（每台机器的 SDK 路径不同，绝不能进库） ----------
+local.props
+# 但模板必须进库，别人靠它知道怎么配
+!local.props.example
+
+# ---------- 编译产物 ----------
+bin/
+bin-*/
+obj/
+obj-*/
+publish/
+# 本项目把编译中间产物放在 build/ 下（见各 csproj 的 BaseOutputPath）
+build/acad/
+build/core/
+build/ApplicationPlugins/
+
+# ---------- 打包 / 交付产物 ----------
+dist/
+release/
+output/
+local-artifacts/
+*.zip
+*.dll
+
+# ---------- 回归截图（XimeTest ui --shot 生成，随时可重出） ----------
+build/shots/
+build/ui_preview*.png
+build/_logo_sizes_preview.png
+
+# ---------- IDE / 编辑器 ----------
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# ---------- 临时 / 本地 ----------
+_tmp*/
+._tmp*/
+tmp/
+*.log
+*.mp4
+.workbuddy/
+
+# ---------- 证书 / 密钥 ----------
+*.pfx
+*.snk
+*.key
+*.pem

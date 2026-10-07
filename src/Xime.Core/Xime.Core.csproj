@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net35;net48;net8.0-windows</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Xime.Core</AssemblyName>
+    <RootNamespace>Xime.Core</RootNamespace>
+    <Version>1.0.2</Version>
+    <!--
+      ★ AssemblyVersion **刻意恒为 1.0.0.0**，不要跟着版本号改：
+        它是 CLR 的"程序集身份"（name+version+culture），决定"这个程序集能不能复用"。
+        插件跑在 acad.exe 里且**程序集无法卸载** —— 若每次发版都改 AssemblyVersion，
+        CLR 会把新旧 Xime.Core 当成两个不同程序集同时加载，
+        在同一次 AutoCAD 会话里 NETLOAD 另一份目录就会变成"两套 Core 并存"，
+        表现为补丁打不上、行为跟日志对不上（老症状："装了新版却一点变化没有"）。
+        对外显示用 <Version> / <FileVersion>，见 XimeApplication.Version。
+    -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.2.0</FileVersion>
+    <Company>影子</Company>
+    <Author>影子</Author>
+    <Product>X输入法</Product>
+    <Copyright>Copyright © 影子 2026</Copyright>
+    <Description>X输入法 - AutoCAD 平台输入法智能切换插件（无视输入法模式）</Description>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Deterministic>true</Deterministic>
+    <!-- 关闭隐式 using，兼容 net35 -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../build/core/</BaseOutputPath>
+    <NoWarn>$(NoWarn);CS1591;CS0618</NoWarn>
+    <!-- net35 无法使用 SDK 默认的分析器 -->
+    <RunAnalyzers>false</RunAnalyzers>
+    <!--
+      注意：这里**不**设置 ApplicationIcon。
+      图标的唯一载体是下面的 EmbeddedResource（运行时由 XimeResources 读取，
+      用于窗体标题栏与状态条）。若同时设置 ApplicationIcon，同一个 74KB 的
+      ICO 会被嵌入两次（托管资源一份 + Win32 图标资源一份），纯属浪费。
+      需要"文件本身带图标"的是用户直接 NETLOAD 的 Xime.dll，见 Xime.Acad.csproj。
+    -->
+  </PropertyGroup>
+
+  <!-- 让 AutoCAD 插件层与测试工具可以访问 Core 的内部类型（如 NativeMethods） -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Xime</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>XimeTest</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- 界面图标资源：内嵌进 DLL，随插件一起分发，无需任何外部文件 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\XimeLogo.ico" />
+    <EmbeddedResource Include="Resources\XimeLogo.png" />
+  </ItemGroup>
+
+  <!-- 引用 WinForms（用于 System.Windows.Forms.Timer 与后续 UI） -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net35' or '$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+</Project>

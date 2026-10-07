@@ -1,0 +1,57 @@
+{
+  // ============================================================
+  //  X输入法 —— 调试配置
+  //
+  //  ★ 为什么附加到 acad.exe 要先编 Debug：
+  //    Xime.Acad.csproj 在 **Release 下故意不产 PDB**（DebugType=none）——
+  //    这是"交付一致性"的要求，改了它 dist 里的 Xime.dll 就不是验证过的那一份。
+  //    所以断点调试必须走 Debug 配置（产 portable PDB）。
+  //    编好之后把 build/acad/Debug/net48 下的两个 DLL NETLOAD 进 AutoCAD，
+  //    再在这里 F5 附加即可。
+  //
+  //  ★ 换版本必须**完全退出 AutoCAD 再 NETLOAD**：
+  //    AssemblyVersion 恒为 1.0.0.0，同一会话里换目录 NETLOAD 会复用旧 Core。
+  // ============================================================
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "① 附加到 AutoCAD（acad.exe）调试插件",
+      "type": "clr",
+      "request": "attach",
+      "processName": "acad",
+      "justMyCode": false,
+      "requireExactSource": false,
+      "preLaunchTask": "调试：编译 Xime.Acad（Debug，产 PDB）"
+    },
+    {
+      "name": "② 运行 XimeTest —— 核心回归（config）",
+      "type": "clr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48/XimeTest.exe",
+      "args": ["config"],
+      "cwd": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48",
+      "console": "integratedTerminal",
+      "preLaunchTask": "验证①：编译 CliTest（XimeTest.exe）"
+    },
+    {
+      "name": "③ 运行 XimeTest —— 设置界面预览（ui）",
+      "type": "clr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48/XimeTest.exe",
+      "args": ["ui"],
+      "cwd": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48",
+      "console": "integratedTerminal",
+      "preLaunchTask": "验证①：编译 CliTest（XimeTest.exe）"
+    },
+    {
+      "name": "④ 运行 XimeTest —— 环境诊断（diag）",
+      "type": "clr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48/XimeTest.exe",
+      "args": ["diag"],
+      "cwd": "${workspaceFolder}/src/Xime.CliTest/bin/Release/net48",
+      "console": "integratedTerminal",
+      "preLaunchTask": "验证①：编译 CliTest（XimeTest.exe）"
+    }
+  ]
+}

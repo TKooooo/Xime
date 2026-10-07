@@ -1,0 +1,32 @@
+# ============================================================
+#  行尾与二进制标记
+#
+#  现状：本仓库所有文本文件在磁盘上都是**纯 LF**（已逐个核实）。
+#  git 全局 core.autocrlf=true，所以：
+#    · **不设 `* text=auto`** —— 免得一次性重写全仓库行尾、产生巨量无意义 diff；
+#    · 只钉住唯一一个"不钉就会坏"的情况：*.sh。
+#
+#  ★ 反而**不要**给 *.ps1 / *.bat / *.cmd 钉 eol=crlf：
+#    工作区当前是 LF，一旦声明"检出应为 CRLF"，git 会立刻把这些文件判成
+#    已修改（convert_to_working_tree 的结果与磁盘不符），平白制造脏状态。
+#    这些文件本来就只在 Windows 上创建，autocrlf 已能正确处理。
+# ============================================================
+
+# 构建脚本：必须是 LF。
+#   autocrlf=true 会在检出时把它变成 CRLF，shebang 与被 `set -e` 解析的行尾都会带上 \r，
+#   在 Linux / macOS / WSL 下直接执行会报 "bad interpreter: No such file or directory"。
+*.sh  text eol=lf
+
+# ---- 二进制：禁止行尾转换、禁止文本 diff ----
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.bmp  binary
+*.dll  binary
+*.exe  binary
+*.pdf  binary
+*.zip  binary
+*.docx binary
+*.mp4  binary

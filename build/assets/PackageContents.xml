@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  X输入法 - AutoCAD ApplicationPlugins 自动加载配置
+
+  安装方式：把整个 "Xime.bundle" 文件夹放入以下任一目录，AutoCAD 启动时自动加载：
+    当前用户： %APPDATA%\Autodesk\ApplicationPlugins\
+    所有用户： %PROGRAMFILES%\Autodesk\ApplicationPlugins\
+
+  说明：LOADCTRLS=14 表示启动时加载 + 打开图形时加载。
+        不同 CAD 版本会自动选择 Series 匹配的 DLL。
+-->
+<ApplicationPackage SchemaVersion="1.0"
+                    Version="1.0.3"
+                    ProductCode="{8F3A2C1E-6B4D-4A7E-9C2F-XIME10000001}"
+                    Name="X输入法"
+                    Description="AutoCAD 平台输入法智能切换插件 —— 无视输入法模式"
+                    Author="影子"
+                    HelpFile="./AutoLoad.lsp"
+                    Icon="./Xime.ico"
+                    AppVersion="1.0.3"
+                    ProductType="Application">
+
+  <CompanyDetails Name="影子" Url="" Email="" />
+
+  <RuntimeRequirements OS="Win32|Win64"
+                       Platform="AutoCAD*"
+                       Series="R18.0|R18.1|R18.2|R19.0|R19.1|R20.0|R20.1|R21.0|R22.0|R23.0|R23.1|R24.0|R24.1|R24.2|R24.3|R25.0|R25.1"
+                       SupportPath="1" />
+
+  <!-- AutoCAD 2010 - 2012（.NET 3.5） -->
+  <Components Description="AutoCAD 2010-2012 (.NET 3.5)">
+    <RuntimeRequirements OS="Win32|Win64" Platform="AutoCAD*"
+                         Series="R18.0|R18.1|R18.2" />
+    <ComponentEntry AppName="XIME"
+                    Version="1.0.3"
+                    ModuleName="./net35/Xime.dll"
+                    AppDescription="X输入法 核心组件 (net35)"
+                    LoadOnAutoCADStartup="True"
+                    LoadOnCommandInvocation="False">
+      <Commands GroupName="XIME">
+        <Command Global="xime"           Local="xime" />
+        <Command Global="XIMESTATUS"     Local="XIMESTATUS" />
+        <Command Global="XIMEON"         Local="XIMEON" />
+        <Command Global="XIMEOFF"        Local="XIMEOFF" />
+        <Command Global="XIMEDIAG"       Local="XIMEDIAG" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+
+  <!-- AutoCAD 2013 - 2024（.NET 4.x） -->
+  <Components Description="AutoCAD 2013-2024 (.NET Framework 4.x)">
+    <RuntimeRequirements OS="Win32|Win64" Platform="AutoCAD*"
+                         Series="R19.0|R19.1|R20.0|R20.1|R21.0|R22.0|R23.0|R23.1|R24.0|R24.1|R24.2|R24.3" />
+    <ComponentEntry AppName="XIME"
+                    Version="1.0.3"
+                    ModuleName="./net48/Xime.dll"
+                    AppDescription="X输入法 核心组件 (net48)"
+                    LoadOnAutoCADStartup="True"
+                    LoadOnCommandInvocation="False">
+      <Commands GroupName="XIME">
+        <Command Global="xime"           Local="xime" />
+        <Command Global="XIMESTATUS"     Local="XIMESTATUS" />
+        <Command Global="XIMEON"         Local="XIMEON" />
+        <Command Global="XIMEOFF"        Local="XIMEOFF" />
+        <Command Global="XIMEDIAG"       Local="XIMEDIAG" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+
+  <!-- AutoCAD 2025 - 2026（.NET 8） -->
+  <Components Description="AutoCAD 2025-2026 (.NET 8)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*"
+                         Series="R25.0|R25.1" />
+    <ComponentEntry AppName="XIME"
+                    Version="1.0.3"
+                    ModuleName="./net8/Xime.dll"
+                    AppDescription="X输入法 核心组件 (net8)"
+                    LoadOnAutoCADStartup="True"
+                    LoadOnCommandInvocation="False">
+      <Commands GroupName="XIME">
+        <Command Global="xime"           Local="xime" />
+        <Command Global="XIMESTATUS"     Local="XIMESTATUS" />
+        <Command Global="XIMEON"         Local="XIMEON" />
+        <Command Global="XIMEOFF"        Local="XIMEOFF" />
+        <Command Global="XIMEDIAG"       Local="XIMEDIAG" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+
+</ApplicationPackage>
