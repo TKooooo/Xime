@@ -1,0 +1,85 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ============================================================
+     X输入法 —— 浩辰 CAD（GstarCAD）宿主插件
+
+     宿主 API 程序集（都在浩辰安装目录里，随软件一起装，无需额外 SDK）：
+       GcCoreMgd.dll   ApplicationServices / Runtime / EditorInput / Windows
+       GcDbMgd.dll     DatabaseServices / Geometry
+       GcMgd.dll       Windows / 内建命令
+
+     目标框架：浩辰官方《GstarCAD 2025/2026 .NET Programming Guide》——
+              浩辰 CAD 2026 的 .NET API 是 **.NET 8**（本机安装目录里
+              GcCoreMgd.dll / GcMgd.dll / GcDbMgd.dll 都带 .runtimeconfig.json，
+              tfm = net8.0），故用 net8.0-windows。
+
+     ★ 插件正文（XimeApplication / XimeCommands / Compat）**不在本目录**，
+       而是链接自 ../Xime.Plugin —— 三套宿主共用同一份源码，
+       本工程只负责"用哪个宿主的 API + 怎么注册自动加载"。
+    ============================================================
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Xime.GstarCad</AssemblyName>
+    <RootNamespace>Xime.Plugin</RootNamespace>
+    <Version>1.0.5</Version>
+    <!-- 同 AutoCAD / 中望：程序集身份恒为 1.0.0.0 -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.5.0</FileVersion>
+    <Company>影子</Company>
+    <Author>影子</Author>
+    <Product>X输入法</Product>
+    <Copyright>Copyright © 影子 2026</Copyright>
+    <Description>X输入法 - 浩辰CAD(GstarCAD) 平台输入法智能切换插件（无视输入法模式）</Description>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../build/gstarcad/</BaseOutputPath>
+    <NoWarn>$(NoWarn);CS1591;CS0618;MSB3277;MSB3270</NoWarn>
+    <RunAnalyzers>false</RunAnalyzers>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <DebugType Condition="'$(Configuration)' == 'Debug'">portable</DebugType>
+    <DebugType Condition="'$(Configuration)' != 'Debug'">none</DebugType>
+    <!--
+      WinForms 必须开：设置界面（Xime.Core/UI/SettingsForm.cs）是 WinForms 的，
+      且 net8 上 Microsoft.Win32.Registry 也由 Windows 桌面框架提供。
+    -->
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- ★ 宿主编译符号：插件层共享源码靠它切到 Gssoft.Gscad.* -->
+    <DefineConstants>$(DefineConstants);HOST_GSTARCAD</DefineConstants>
+    <!-- 声明"本工程需要浩辰 CAD 的托管程序集"，供 Directory.Build.props 校验 -->
+    <XimeNeedsGstarCadSdk>true</XimeNeedsGstarCadSdk>
+
+    <ApplicationIcon>$(MSBuildThisFileDirectory)..\Xime.Core\Resources\XimeLogo.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <!-- ★★ 共享插件层源码（三宿主同一份），说明见 Xime.Acad.csproj -->
+  <ItemGroup>
+    <Compile Include="..\Xime.Plugin\**\*.cs" LinkBase="Plugin" />
+  </ItemGroup>
+
+  <!-- 浩辰 CAD 托管程序集（Copy Local = false：运行时由 gcad.exe 本体提供） -->
+  <ItemGroup>
+    <Reference Include="GcCoreMgd">
+      <HintPath>$(GstarCadRefDir)\GcCoreMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GcDbMgd">
+      <HintPath>$(GstarCadRefDir)\GcDbMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GcMgd">
+      <HintPath>$(GstarCadRefDir)\GcMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xime.Core\Xime.Core.csproj" />
+  </ItemGroup>
+
+</Project>

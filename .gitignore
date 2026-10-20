@@ -51,6 +51,10 @@ tmp/
 *.mp4
 .workbuddy/
 
+# ---------- Python 字节码缓存（跑 build/*.py 会生成） ----------
+__pycache__/
+*.pyc
+
 # ---------- 证书 / 密钥 ----------
 *.pfx
 *.snk

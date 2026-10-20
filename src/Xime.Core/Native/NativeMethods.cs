@@ -271,6 +271,25 @@ namespace Xime.Core.Native
         [DllImport(User32, SetLastError = true)]
         public static extern IntPtr GetParent(IntPtr hWnd);
 
+        /// <summary><c>GetWindow(hwnd, GW_OWNER)</c>（v59）。</summary>
+        public const uint GW_OWNER = 4;
+
+        /// <summary>
+        /// 取窗口的**属主**窗口（v59 新增）。
+        ///
+        /// ★ 为什么必须看属主链，不能只看父链：
+        ///   WPF 的 <c>Popup</c> / 下拉浮层是**带属主的顶层窗口** ——
+        ///   `GetParent()` 对它返回 **NULL**（它不是任何窗口的子窗口），
+        ///   但 `GetWindow(GW_OWNER)` 会给出它挂靠的那个控件。
+        ///   AutoCAD 的「命令自动完成」下拉框正是这一类：实测它是
+        ///   `HwndWrapper[…]`（→ 被判成"编辑控件"），父链为空
+        ///   （→ 父链里**永远**找不到 "CLI Palette"），
+        ///   于是被误判成"文字编辑框" ⇒ 一进编辑态就把命令名交给输入法。
+        ///   属主链能把这条路径补回来。
+        /// </summary>
+        [DllImport(User32, SetLastError = true)]
+        public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
         [DllImport(User32, SetLastError = true, CharSet = CharSet.Unicode)]
         public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
 

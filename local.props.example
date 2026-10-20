@@ -31,4 +31,28 @@
     <SdkRoot>D:\ObjectARX-SDK</SdkRoot>
   </PropertyGroup>
 
+  <!--
+    ============================================================
+     中望 CAD / 浩辰 CAD 的宿主程序集（v1.1.0 新增）
+
+     ★ 与 ObjectARX SDK 不同：这两家的宿主 API 程序集**随软件一起安装**，
+       不需要额外下载。**通常不用在这里配** —— Directory.Build.props 会按
+       注册表里"当前版本分支"的 Location / LOCATION 自动定位到安装目录。
+
+       只有在下面两种情况才需要手动指定：
+         · 自动定位失败（比如装的是绿色版、注册表被清过）；
+         · 想拿另一台机器的安装目录来编译。
+
+     需要指向**安装目录本身**（不是某个 SDK 子目录）：
+       中望：<安装目录>  里要有 ZwManaged.dll、ZwDatabaseMgd.dll
+       浩辰：<安装目录>  里要有 GcCoreMgd.dll、GcDbMgd.dll、GcMgd.dll
+    ============================================================
+  -->
+  <PropertyGroup>
+    <!-- 示例（按需取消注释并改成自己的路径）：
+    <ZwcadRefDir>C:\Program Files\ZWSOFT\ZWCAD 2026</ZwcadRefDir>
+    <GstarCadRefDir>C:\Program Files\浩辰软件\浩辰CAD2026</GstarCadRefDir>
+    -->
+  </PropertyGroup>
+
 </Project>

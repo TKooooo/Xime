@@ -342,6 +342,27 @@ namespace Xime.Core
         private bool _commandLineNeedsEnglish;
 
         /// <summary>
+        /// v59：上一次「误判自愈」（<see cref="ReclaimEnglishForIdlePrompt"/>）写日志的时刻。
+        /// 自愈发生在**每次按键**的路径上，日志必须限流，否则一次敲命令能刷几十行。
+        /// </summary>
+        private int _reclaimLogTick;
+
+        /// <summary>v59：自愈日志的最小间隔（毫秒）。</summary>
+        private const int ReclaimLogGapMs = 2000;
+
+        /// <summary>
+        /// v60：上一次「命令期间改注入字符」（<see cref="ShouldSeizeCommandKeyAsCharNow"/>）
+        /// 写日志的时刻。
+        ///
+        /// 与 v59 的自愈一样，这个判定位于**每次按键**的路径上（命令执行期间每个字母都会走），
+        /// 日志必须限流，否则敲一条命令就能刷几十行。
+        /// </summary>
+        private int _seizeLogTick;
+
+        /// <summary>v60：上述日志的最小间隔（毫秒）。</summary>
+        private const int SeizeLogGapMs = 2000;
+
+        /// <summary>
         /// 是否处于「文字编辑框」编辑态。
         ///
         /// 场景：双击文字对象进入编辑时，部分第三方插件（如**天正单行文字**）
@@ -579,7 +600,16 @@ namespace Xime.Core
         private int _readbackSamples;
         private int _readbackInconclusive;
         private int _readbackDistinctMask;   // 位 0 = 读到过 Unknown，位 1 = English，位 2 = Chinese
-        private bool _readbackChannelWarned;
+
+        /// <summary>
+        /// ★★★ v61：本标志已从"纯诊断"**升格为决策输入**（见
+        /// <see cref="ShouldTakeOverKeys"/>）。
+        ///
+        /// 它在**输入法探测线程**（<see cref="TrackReadbackHealth"/>）上写，
+        /// 却在**键盘钩子线程**（<see cref="ShouldCaptureKeyCore"/>）上读 ——
+        /// 因此必须是 volatile，否则兜底可能迟迟不生效（JIT 可以把读到的值缓存住）。
+        /// </summary>
+        private volatile bool _readbackChannelWarned;
         private const int ReadbackChannelMinSamples = 8;
 
         /// <summary>
@@ -899,6 +929,77 @@ namespace Xime.Core
             return mode == XimeWorkMode.IgnoreIme || mode == XimeWorkMode.SwitchIme;
         }
 
+        /// <summary>
+        /// ★★★ v61：本模式下，键盘钩子是否应当**接管命令栏按键**。
+        ///
+        /// ─────────────── 为什么会有这条判据 ───────────────
+        ///
+        /// 两个工作模式的**英文来源**完全不同：
+        ///   · 无视输入法模式（IgnoreIme）—— 英文来自**钩子**：吞掉物理键、
+        ///     用 <c>SendInput(KEYEVENTF_UNICODE)</c> 直接注入命令栏，**不碰输入法状态**。
+        ///   · 切换输入法模式（SwitchIme）—— 英文来自**真的把输入法切到英文**，
+        ///     钩子只做观察者（历史实现：`WorkMode != IgnoreIme` 直接早退）。
+        ///
+        /// 第二条路有一个此前被默认成立的隐含前提：**这台机器上"切换输入法中英态"
+        /// 这件事是能成的**。v48 的诊断已经把这个前提打碎了一半 ——
+        /// 它钉住了「回读通道失效」（`Inconclusive` 占满样本、English 读数出现 0 次），
+        /// 也就是**切没切成根本不知道**，切换只能靠猜。
+        ///
+        /// 现场证据（报障用户 AutoCAD 2024 + 搜狗输入法，随测试视频一起提供的
+        /// `xime_startup.log` 2026-10-14 14:17 会话）：
+        ///   · 整个会话 `Disengage` 全是"切换输入法模式"措辞、
+        ///     `需要中文（文字输入）` 出现 4 次、`需要英文（命令栏）` 出现 **0 次**；
+        ///   · 视频里同一个"切换输入法模式"下**两个方向都出错**：
+        ///     命令行敲 `tt` 弹出的是搜狗候选窗（该英文却成了中文），
+        ///     而在位文字编辑器里敲 `doubaoshurufa` 却原样留在拉丁字母（该中文却成了英文）。
+        ///   ⇒ 这正是"只能靠猜"的典型表现：切换成不成功完全随机。
+        ///
+        /// ─────────────── 本判据做什么 ───────────────
+        ///
+        /// **当该输入法的中英态通道已被证实不可信时，让切换输入法模式也退回钩子兜底。**
+        /// 命令栏的英文从此由钩子直接注入 —— 与输入法状态无关，**确定性成立**；
+        /// 输入法状态的切换照旧尽力而为（成了更快，不成为无损）。
+        ///
+        /// ★ 为什么可以安全地在切换模式下启用钩子：接管与否的**真正闸门**并不是模式，
+        ///   而是 <c>_commandLineNeedsEnglish</c> —— 它只在这两种时刻为 true：
+        ///   空闲命令提示符 / 非文字类命令期间；而进入文字编辑（
+        ///   <see cref="SwitchToChinese(bool)"/>）与"需要中文"的命令都会把它清掉，
+        ///   此时钩子一律放手、输入法照常组字打中文。
+        ///   天正 RYBZ 那类"焦点在绘图区读原始按键"的场景，另由 v60 的
+        ///   <c>ShouldSeizeCommandKeyAsCharNow</c>（焦点必须在可组字控件上）挡在外面。
+        ///
+        /// ★ 抽成纯函数的理由：这条契约一旦写错，失效形式是"打不出中文"或
+        ///   "命令被吃成拼音"，靠注释守不住，必须有可执行断言（XimeTest v61 组）。
+        /// </summary>
+        /// <param name="mode">当前工作模式（配置里的值）。</param>
+        /// <param name="switchChannelUnusable">
+        /// 该输入法的 IMM32 中英态通道是否**已被证实不可信**
+        /// （<see cref="IsReadbackChannelUseless"/> 判定通过，即 <c>_readbackChannelWarned</c>）。
+        /// </param>
+        internal static bool ShouldTakeOverKeys(XimeWorkMode mode, bool switchChannelUnusable)
+        {
+            // 无视输入法模式：本来就是钩子通路，契约一字不变。
+            if (mode == XimeWorkMode.IgnoreIme) return true;
+
+            // 切换输入法模式：只有"切不动也读不出"时才退回钩子兜底。
+            //   ★ 通道还能用时**不要**接管 —— 那等于把切换模式偷偷变成无视模式，
+            //     白白多出"动用户输入法状态"的副作用。
+            if (mode == XimeWorkMode.SwitchIme) return switchChannelUnusable;
+
+            return false;   // 未知模式一律不接管（与 Engage 的守门一致）
+        }
+
+        /// <summary>
+        /// <see cref="ShouldTakeOverKeys"/> 的**事实采集端**：配置里的模式 +
+        /// v48 已判定的"该输入法中英态通道不可信"。
+        ///
+        /// 生产代码只走这一个入口（决策 / 执行 / 诊断共用），避免日后漂移。
+        /// </summary>
+        private bool KeysTakeOverEnabled
+        {
+            get { return ShouldTakeOverKeys(_config.WorkMode, _readbackChannelWarned); }
+        }
+
         public void Engage()
         {
             if (_disposed) return;
@@ -984,12 +1085,12 @@ namespace Xime.Core
             _ensurePendingReason = null;
 
             // 解析一次命令栏输入控件，供后续投递使用
-            var frame = AcadTextFrame.Resolve();
+            var frame = HostTextFrame.Resolve();
             // ★ v45：接管/模式是"用户到底在哪个模式"的唯一权威记录，改走 Note。
             Note("Engage：进入接管（" + _engagedMode + "），CAD窗口=0x"
                 + _focus.AcadMainWindow.ToInt64().ToString("X") +
                 " 命令栏控件=0x" + frame.ToInt64().ToString("X") +
-                (frame != IntPtr.Zero ? " 类名=" + AcadTextFrame.GetClassNameSafe(frame) : ""));
+                (frame != IntPtr.Zero ? " 类名=" + HostTextFrame.GetClassNameSafe(frame) : ""));
 
             // ★ v58：删掉了 v55 在这里加的 `CaptureOriginalIme()`。
             //   无视输入法模式的承诺是"**绝不碰**用户输入法状态"，既然不再切，
@@ -1151,7 +1252,7 @@ namespace Xime.Core
             if (switchMode && _switchApplied == ImeMode.English)
                 MarkImeLeftEnglish("退出接管时，我们确信的最终状态仍是英文");
 
-            AcadTextFrame.Invalidate();
+            HostTextFrame.Invalidate();
         }
 
         private void TryInstallHook()
@@ -1325,8 +1426,8 @@ namespace Xime.Core
                 catch (Exception) { }
                 if (f != IntPtr.Zero && NativeMethods.IsWindow(f)
                     && IsAcadProcessWindow(f) && !IsOwnWindow(f)
-                    && !AcadTextFrame.IsCommandLineWindow(f)
-                    && AcadTextFrame.IsTextInputHost(f))
+                    && !HostTextFrame.IsCommandLineWindow(f)
+                    && HostTextFrame.IsTextInputHost(f))
                 {
                     trustworthy = true;
                     return f;
@@ -1335,16 +1436,16 @@ namespace Xime.Core
             }
 
             // ② 命令栏输入控件
-            //   ★★ 同样必须要求**强特征**：`AcadTextFrame.Resolve()` 的首选策略是
+            //   ★★ 同样必须要求**强特征**：`HostTextFrame.Resolve()` 的首选策略是
             //      "当前焦点控件（Edit-like）"，而"Edit-like"包含弱特征 `Afx:*` ——
             //      也就是说它**可能返回绘图区**（v35 日志里 15 次探测全是它）。
             //      用一个没有 IME 上下文的窗口当靶点，读数就是默认值（恒为中文），
             //      于是"需要中文"永远被判成"已经是中文，无需动作"。
             IntPtr cmd = IntPtr.Zero;
-            try { cmd = AcadTextFrame.Resolve(); }
+            try { cmd = HostTextFrame.Resolve(); }
             catch (Exception) { }
             if (cmd != IntPtr.Zero && NativeMethods.IsWindow(cmd) && !IsOwnWindow(cmd)
-                && AcadTextFrame.IsTextInputHost(cmd))
+                && HostTextFrame.IsTextInputHost(cmd))
             {
                 trustworthy = true;
                 return cmd;
@@ -1364,14 +1465,14 @@ namespace Xime.Core
         ///
         /// ★ 为什么必须在**加载时**就记，而不是等用户敲 <c>XIMEFOCUS</c>：
         ///   本插件的靶点识别完全建立在**窗口类名**上 ——
-        ///   <see cref="AcadTextFrame.MatchStrength"/> 认 `RichEdit` / `Edit` / `HwndWrapper`
-        ///   为强特征，<see cref="AcadTextFrame.IsCommandLineWindow"/> 认父链里的 `CLI Palette`。
+        ///   <see cref="HostTextFrame.MatchStrength"/> 认 `RichEdit` / `Edit` / `HwndWrapper`
+        ///   为强特征，<see cref="HostTextFrame.IsCommandLineWindow"/> 认父链里的 `CLI Palette`。
         ///   而这些类名**随 AutoCAD 版本变**（2014 主框架 `AfxMDIFrame100u`、
         ///   2022 `AfxMDIFrame140u`），天正还会再套一层自己的框架。
         ///   换宿主后的第一次排查，没有这份"词汇表"就只能靠用户手敲命令，而用户通常不会敲。
         ///
-        /// 只读、不改状态。唯一影响是给 <see cref="AcadTextFrame.Resolve"/> 的缓存
-        /// 填一次"当前命令栏控件"，焦点一变即被 <see cref="AcadTextFrame.Invalidate"/> 清掉。
+        /// 只读、不改状态。唯一影响是给 <see cref="HostTextFrame.Resolve"/> 的缓存
+        /// 填一次"当前命令栏控件"，焦点一变即被 <see cref="HostTextFrame.Invalidate"/> 清掉。
         /// </summary>
         internal string[] BuildHostSurveyLines()
         {
@@ -1384,7 +1485,7 @@ namespace Xime.Core
                 lines.Add("    CAD 主窗口 : " + DescribeWindow(main));
 
                 IntPtr cmd = IntPtr.Zero;
-                try { cmd = AcadTextFrame.Resolve(); } catch (Exception) { }
+                try { cmd = HostTextFrame.Resolve(); } catch (Exception) { }
                 lines.Add("    命令栏候选 : " + DescribeWindow(cmd));
 
                 IntPtr foc = IntPtr.Zero;
@@ -1411,12 +1512,12 @@ namespace Xime.Core
             string hex = "0x" + hwnd.ToInt64().ToString("X");
             try
             {
-                string cls = AcadTextFrame.GetClassNameSafe(hwnd);
+                string cls = HostTextFrame.GetClassNameSafe(hwnd);
                 return hex
                      + " 类名=" + (string.IsNullOrEmpty(cls) ? "(空)" : cls)
-                     + " 文本输入宿主=" + AcadTextFrame.IsTextInputHost(hwnd)
-                     + " 命令栏=" + AcadTextFrame.IsCommandLineWindow(hwnd)
-                     + " 强特征=" + AcadTextFrame.MatchStrength(hwnd);
+                     + " 文本输入宿主=" + HostTextFrame.IsTextInputHost(hwnd)
+                     + " 命令栏=" + HostTextFrame.IsCommandLineWindow(hwnd)
+                     + " 强特征=" + HostTextFrame.MatchStrength(hwnd);
             }
             catch (Exception ex)
             {
@@ -1466,7 +1567,7 @@ namespace Xime.Core
                 if (FocusMonitor.GetWindowClass(fg) == "#32770") return false;
 
                 if (fg == _focus.AcadMainWindow) return true;
-                if (AcadTextFrame.IsCommandLineWindow(fg)) return true;
+                if (HostTextFrame.IsCommandLineWindow(fg)) return true;
                 return IsAcadProcessWindow(fg);
             }
             catch (Exception) { return false; }
@@ -2121,7 +2222,7 @@ namespace Xime.Core
                 //
                 //   `RequestSwitchIme` 只在**睡醒那一刻**查过一次 `_switchWanted`；
                 //   可 `ApplySwitchIme` 自己还要跑几十~几百毫秒：
-                //     · `AcadTextFrame.Resolve()` 失败时会**遍历整棵窗口树**（上限 5000 节点）；
+                //     · `HostTextFrame.Resolve()` 失败时会**遍历整棵窗口树**（上限 5000 节点）；
                 //     · `GetModeAt` 的两条 IME 通道各是一次带超时的 `SendMessageTimeout`；
                 //     · `TapShift` 的 down/up 之间固定 `Sleep(40)`。
                 //   这段时间里用户完全可能已经**退出文字编辑**（Esc / 点绘图区），
@@ -2883,7 +2984,7 @@ namespace Xime.Core
                 var focus = CharInjector.GetRealFocusWindow();
                 if (focus == IntPtr.Zero) return true;
                 if (!FocusMonitor.IsEditBoxWindow(focus)) return false;
-                if (AcadTextFrame.IsCommandLineWindow(focus)) return false;
+                if (HostTextFrame.IsCommandLineWindow(focus)) return false;
                 return true;
             }
             catch (Exception)
@@ -2946,6 +3047,101 @@ namespace Xime.Core
         {
             if (!hasActiveCommand) return true;       // 空闲 / 命令已结束 → 照旧（双击文字改字）
             return commandNeedsChinese;              // 命令期间：只有文字类命令才允许进编辑态
+        }
+
+        /// <summary>
+        /// ★★★ v59：命令栏英文标志被「误判成文字编辑态」清掉之后，是否应当**当场抢回**。
+        ///
+        /// ─────────────── 事故现场（豆包输入法 · 2026-10-14） ───────────────
+        ///
+        /// 用户症状原话：「AutoCAD 平台下使用豆包输入法，输入命令，当命令只有一个字母的
+        /// 时候是正常的，但是当命令是两个及以上字母的时候就会变成中文输入。」
+        /// 视频逐帧可见：命令行里是 `T`（已提交）+ `t`（输入法组字中）+
+        /// 豆包候选窗「1 他 2 她 3 太 …」，**只有第一个字母是英文字面量**。
+        ///
+        /// 三条结构性事实叠成这条链路：
+        ///
+        ///   ① **豆包是纯 TSF 文本服务**（实测注册表：CLSID
+        ///      `{9D2B2E2B-…}`、实现 `C:\Windows\System32\tsf-oime.dll`、
+        ///      `SubstituteLayout=0x08040804`，**没有任何 IMM32 键盘布局登记**）。
+        ///      ⇒ <c>ImmAssociateContext(hwnd, IntPtr.Zero)</c> 那套旁路
+        ///        对它**天然无效** —— 能不能保住英文，**完全取决于键盘钩子
+        ///        有没有把字母吞掉**（吞掉后 `SendInput(KEYEVENTF_UNICODE)` 注入，
+        ///        不经过输入法）。
+        ///
+        ///   ② 钩子吞不吞，**只由 <c>_commandLineNeedsEnglish</c> 一个布尔量决定**；
+        ///      而这个量**唯一**被清 false 的路径是 <c>SwitchToChinese()</c>，
+        ///      <c>SwitchToChinese()</c> **唯一**的调用者是
+        ///      <c>EnterTextEditMode()</c>。
+        ///
+        ///   ③ <c>EnterTextEditMode()</c> 的准入判据是 `isEdit && !isCommandLine`，
+        ///      它在 AutoCAD 上**结构性脆弱**：
+        ///        · `FocusMonitor.IsEditBoxClass`（v59 前）把**所有** `HwndWrapper`
+        ///          都算"文字编辑控件"；
+        ///        · 而 AutoCAD 的命令栏**整个家族都是 `HwndWrapper`** ——
+        ///          命令栏输入控件本体、**「命令自动完成」下拉框**（本机实测：
+        ///          敲下第一个字母后立刻 `创建/显示`，类名
+        ///          `HwndWrapper[…]`、尺寸 320×68 → 320×214）、信息中心、
+        ///          快速访问工具栏搜索框、文档切换条……；
+        ///        · 唯一能救它的 `IsCommandLineWindow`（v59 前）只走**父链**找
+        ///          `CLI Palette` + 依赖 `Resolve()` 的 **3 秒缓存命中**。
+        ///          命令栏本体父链确实带 `CLI Palette`（本机实测
+        ///          `HwndWrapper < AfxWnd100u "CLI Palette" < …`），
+        ///          但**派生浮层是"带属主的顶层窗口"，`GetParent()` 返回 NULL**
+        ///          ⇒ 父链永远找不到；`Resolve()` 又会因为 3 秒缓存而给出
+        ///          **过期答案**（缓存里存的是别的窗口）⇒ 判成"编辑框"。
+        ///
+        ///   ⇒ **完整症状解释**：
+        ///      第 1 个字母——标志还是 true，钩子吞键 + 注入 ⇒ 命令名正常出现；
+        ///      这个字母让 AutoCAD 弹出**自动完成下拉**（`HwndWrapper` 浮层）并
+        ///      产生一次焦点事件 ⇒ 被判成"编辑框" ⇒ `EnterTextEditMode` ⇒
+        ///      `SwitchToChinese` ⇒ **标志清空** ⇒
+        ///      第 2 个字母起——钩子不再吞键，物理键直达豆包（中文态）⇒ 组字 + 候选窗。
+        ///      **单字母命令**敲完一个字母就回车，**永远走不到第二步**，所以"看起来正常"。
+        ///
+        /// ─────────────── 本判据在做什么 ───────────────
+        ///
+        /// 不去猜"焦点那个窗口到底是不是编辑框"（那正是出错的地方），
+        /// 而是问一个**当场就能回答**的问题：
+        /// **「此刻用户可能正在输入文字内容吗？」** —— 证据不足就不认。
+        ///
+        ///   · 有活动命令（`hasActiveCommand`）→ **绝不插手**。
+        ///     命令期间该不该接管由命令白名单 / PassThrough 那一套说话；
+        ///     真正的文字类命令（TEXT / MTEXT / DDEDIT…）在 `OnCommandWillStart`
+        ///     就已经 `SwitchToChinese` 了，不依赖本判据。
+        ///   · 焦点明确在命令栏链上 → **这就是命令栏**，抢回（铁证）。
+        ///   · 焦点**根本不在任何编辑控件上**（绘图区 `Afx:…` / 主框架 /
+        ///     各种面板）→ 空闲期用户只可能是在敲命令，抢回。
+        ///     ★ 本机实测支撑：用户每敲一个字母，焦点都会在
+        ///       「命令栏 `HwndWrapper`」⇄「绘图区 `Afx:…:28:…`」之间抖一次。
+        ///   · 焦点确实是编辑控件，**且是 WPF 宿主 `HwndWrapper`** → 空闲期
+        ///     一律按"命令栏家族"处理，抢回。理由：AutoCAD / 天正 / 协同设计
+        ///     里**真正承载文字输入**的控件最终都是**原生** `Edit` /
+        ///     `RichEdit`（`WindowsForms10.EDIT…` 亦然），
+        ///     纯 WPF 文字对话框在 CAD 生态里极罕见；而 `HwndWrapper` 在 CAD 进程里
+        ///     绝大多数是主框架派生出来的面板/浮层。
+        ///   · 焦点是**原生编辑控件**（`Edit*` / `RICHEDIT*` / `RichEdit*` /
+        ///     `AfxWnd*`）→ 这是真的在编辑文字（典型：天正单行文字双击，
+        ///     **不经过命令系统**）→ **不抢**，交还输入法打中文。
+        ///
+        /// ★ 抽成纯函数的理由：这条契约的失效形式是"偶发地打不出英文/打不出中文"，
+        ///   靠注释守不住，必须有可执行断言（见 XimeTest 的 v59 组）。
+        /// </summary>
+        /// <param name="hasActiveCommand">此刻是否有活动命令（<c>_currentCommand != null</c>）。</param>
+        /// <param name="focusIsCommandLine">真实焦点是否属于命令栏链。</param>
+        /// <param name="focusIsEditBox">真实焦点是否被 <see cref="FocusMonitor.IsEditBoxClass"/> 判为编辑控件。</param>
+        /// <param name="focusIsWpfHost">真实焦点的类名是否为 WPF 宿主（<c>HwndWrapper</c>）。</param>
+        internal static bool ShouldReclaimEnglishForIdlePrompt(
+            bool hasActiveCommand,
+            bool focusIsCommandLine,
+            bool focusIsEditBox,
+            bool focusIsWpfHost)
+        {
+            if (hasActiveCommand) return false;   // 命令执行期间：由命令状态说话，绝不插手
+            if (focusIsCommandLine) return true;  // 铁证：就在命令栏上
+            if (!focusIsEditBox) return true;     // 焦点不在编辑控件上 ⇒ 空闲期只能是在敲命令
+            if (focusIsWpfHost) return true;      // WPF 宿主 = CAD 命令栏家族 ⇒ 同上
+            return false;                         // 原生 Edit/RichEdit ⇒ 真的在编辑文字，不抢
         }
 
         #region v6：命令期间「让 CAD 窗口无视输入法」
@@ -3034,7 +3230,12 @@ namespace Xime.Core
                     //   XIMEBYPASS 1 报「枚举 0 个」（进来时已生效、走幂等早退）、
                     //   XIMEBYPASS 0 那句"现在可以正常打中文了"当场失效、
                     //   XIMESTATUS 永远报「当前生效=是」。现场实测踩到，故补此条。
-                    ImeWindowBypass.IsOwnPluginCommand(_currentCommand));
+                    ImeWindowBypass.IsOwnPluginCommand(_currentCommand),
+                    // ★★★ v62：焦点落在外部文本编辑控件上（图层管理器名称框、对话框输入框…）
+                    //   ⇒ 不许解除关联。第 ⑤ 条（_inTextEditMode）依赖焦点事件送达，
+                    //   这一条**直接就地读焦点**，堵住"焦点事件没来 / 命令先于焦点事件"
+                    //   两种漏网（用户症状：图层名打不进中文）。
+                    FocusIsForeignEditBox());
 
                 // ★ v6.1：手动强制（XIMEBYPASS 1）—— 让"回到 CAD 里试着按键"这段空闲期
                 //   也保持解除。但硬闸门必须过（文字编辑态 / 开关关闭 / 未接管 ⇒ 一律作废），
@@ -3419,8 +3620,8 @@ namespace Xime.Core
                 bool t;
                 var h = ResolveAcadImeTarget(out t);
                 if (h != IntPtr.Zero
-                    && IsUsableEnsureChineseTarget(t, AcadTextFrame.IsTextInputHost(h),
-                                                      AcadTextFrame.IsCommandLineWindow(h)))
+                    && IsUsableEnsureChineseTarget(t, HostTextFrame.IsTextInputHost(h),
+                                                      HostTextFrame.IsCommandLineWindow(h)))
                 {
                     trusted = true;
                     if (i > 0)
@@ -3741,6 +3942,19 @@ namespace Xime.Core
                 + "★ 根治需要改走 TSF 通道"
                 + "（ITfCompartmentMgr + GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION），"
                 + "本版**暂未实现**。在此之前，建议改用「无视输入法模式」（它不依赖任何读数）。");
+
+            // ★★★ v61：这条警告以前只是"告诉你别指望读数"，现在它**同时触发兜底** ——
+            //   既然"切没切成"根本不知道，就不该再让"命令栏必须是英文"押在切换上。
+            //   只有当当前模式**确实依赖切换**时才提示，避免在无视模式下刷一条无意义的日志。
+            if (_config.WorkMode == XimeWorkMode.SwitchIme
+                && ShouldTakeOverKeys(_config.WorkMode, switchChannelUnusable: true))
+            {
+                Note("★★★ 兜底已启用（v61）：当前是「切换输入法模式」，而本机输入法的中英态"
+                    + "通道不可信 → 命令栏的英文改由**键盘钩子直接注入**"
+                    + "（不经过输入法，与输入法状态无关，确定性成立）。"
+                    + "输入法状态的切换照旧尽力而为；"
+                    + "进入文字编辑 / 文字类命令时仍会把输入权交还输入法。");
+            }
         }
 
         /// <summary>
@@ -3981,8 +4195,8 @@ namespace Xime.Core
             bool trusted;
             var hwnd = ResolveAcadImeTarget(out trusted);
             if (hwnd == IntPtr.Zero
-                || !IsUsableEnsureChineseTarget(trusted, AcadTextFrame.IsTextInputHost(hwnd),
-                                                         AcadTextFrame.IsCommandLineWindow(hwnd)))
+                || !IsUsableEnsureChineseTarget(trusted, HostTextFrame.IsTextInputHost(hwnd),
+                                                         HostTextFrame.IsCommandLineWindow(hwnd)))
                 return;   // 编辑控件还没到位 → 保留待补，等下一次触发
 
             // 抑制窗口：刚真正切换过 → 视为已经完成
@@ -4062,19 +4276,38 @@ namespace Xime.Core
             if (!_isEngaged) return false;
             if (!_config.Enabled) return false;
 
-            // ★ 只有「无视输入法模式」才需要接管按键。
-            //   切换输入法模式靠真的切换输入法状态来实现英文 —— 它不装钩子，
-            //   物理按键必须原样交给输入法（否则用户打不了中文）。
-            if (_config.WorkMode != XimeWorkMode.IgnoreIme) return false;
+            // ★★★ v61：本模式下钩子是否接管按键 —— 见 ShouldTakeOverKeys。
+            //   无视输入法模式：恒 true（原通路一字不变）。
+            //   切换输入法模式：仅当该输入法的中英态通道已被 v48 判定不可信时，
+            //   才退回钩子兜底。现场（AutoCAD 2024 + 搜狗输入法）：
+            //   切换模式在两个方向上都会猜错 —— 命令行该英文却弹候选窗。
+            if (!KeysTakeOverEnabled) return false;
 
             // ★ 只有显式选择「完全放行」时才在命令执行期间松手。
             //   ★★ v1.0.2 无感修订版：默认档 = PassThrough（放行物理键）——
             //   因为**它是天正唯一认的档**（现场证伪：PostKey/PostKeyFrame/ReplayVk/UNICODE
             //   四条合成通道天正一律不认，PostKey 只会把字母打进命令栏）。
             //   它的默认工作模式是「切换输入法模式」，那种模式下根本走不到这里。
-            if (ShouldPassThroughKey(_config, _currentCommand)) return false;
-
-            if (!_commandLineNeedsEnglish) return false;
+            // ★★★ v60 第二道闸门（豆包 / TSF 输入法事故 · 见 ShouldSeizeCommandKeyAsChar）：
+            //
+            //   PassThrough 这一档的契约是「命令执行期间物理键原样交给系统」，
+            //   之所以敢放行，是因为另有一条保险：ImeWindowBypass 会在命令期间
+            //   用 ImmAssociateContext(hwnd, NULL) 解除 CAD 窗口与输入法的关联。
+            //
+            //   ★ 但 ImmAssociateContext 动的是 **IMM32 的 HIMC** —— 对**纯 TSF 文本服务**
+            //     （豆包输入法：tsf-oime.dll，注册表里 Keyboard Layouts 命中 0 项、
+            //      无任何 .ime 文件）**结构性无效**：TSF 的按键路由走 ITfThreadMgr /
+            //      文档管理器，压根不看 HIMC。
+            //   ⇒ 对这类输入法，命令期间"放行"= 字母直接喂给中文态输入法 ⇒ 组字 + 候选窗。
+            //     症状就是用户报的：`undo` 之后打二级命令 `a`、`DRAWORDER` 之后打 `b`，
+            //     第一次正常、删掉重打就变中文（焦点在命令行输入框时输入法才有组字上下文）。
+            //
+            //   ⇒ 所以放行之前多问一句：**此刻焦点是不是在"输入法能组字的地方"？**
+            //     是 ⇒ 吞键 + 注入字符（WM_CHAR 通道，输入法看不到）；
+            //     否（焦点在绘图区，天正 RYBZ 那种 acedGrRead 读原始按键的场景）
+            //       ⇒ 照旧放行 —— 那是这一档存在的唯一理由，必须保住。
+            if (ShouldPassThroughKey(_config, _currentCommand) && !ShouldSeizeCommandKeyAsCharNow())
+                return false;
 
             // ★★ v35：**不再**因为 CapsLock 开启就整体放行。
             //
@@ -4102,7 +4335,395 @@ namespace Xime.Core
             // 安全护栏：只在 AutoCAD 自身窗口处于前台时接管
             if (!IsForegroundInAcad()) return false;
 
+            // ★★★ v62：焦点落在**外部文本编辑控件**上 ⇒ 彻底让路
+            //   （见 ShouldYieldToForeignEditBox：AutoCAD 图层特性管理器的名称框、
+            //    各类对话框输入框都是这种 —— 用户要在那里打中文）。
+            //
+            //   ★ 位置在 v59 自愈**之前**：本条比自愈更"硬" ——
+            //     自愈只是把命令栏的英文标志抢回来，而这里要的是"压根不碰"。
+            //     放在前面同时省掉一次自愈调用（两者都不会在编辑框上有意义）。
+            //   ★ 也因此在 v60 的 PassThrough 早退之后：那一段处理的是
+            //     "命令执行期间 + 焦点在可组字宿主"（命令栏/自动完成下拉），
+            //     与本条处理的"焦点在真编辑框"互斥、互补。
+            if (FocusIsForeignEditBox())
+            {
+                if (_debugLog)
+                    Dbg("  跳过: 焦点在外部文本编辑控件上（非命令栏）⇒ 让路给输入法");
+                return false;
+            }
+
+            // ★★★ v59 误判自愈（豆包输入法事故 · 见 ShouldReclaimEnglishForIdlePrompt）：
+            //   走到这里说明：IgnoringIme 模式、非 PassThrough、前台是 CAD、
+            //   而且按下的是一枚**可打印字符键**（没有 Ctrl/Alt/Win）——
+            //   这就是"用户正在往命令栏敲命令"本身。
+            //   此时若标志说"命令栏不需要英文"，那是**误判**：
+            //   AutoCAD 的命令栏家族（命令栏本体 / 命令自动完成下拉 / 信息中心…）
+            //   全是 `HwndWrapper`，被 `IsEditBoxClass` 一律当成"文字编辑框"，
+            //   于是把"在敲命令"误判成"在编辑文字"，把命令名交给了输入法
+            //   （症状：第一个字母正常，第二个字母起变中文）。
+            //   ⇒ 不盲信标志：就地采一次真实焦点复核，证据不足就把英文接管抢回来。
+            //
+            // ★ 位置很关键：**放在所有廉价闸门之后** ——
+            //   组合键（Ctrl/Alt/Win）、非可打印键、前台不是 CAD 都不会走到这里，
+            //   因此自愈只可能被"真的在敲命令"的按键触发，不会被 Ctrl+C 之类误触发。
+            // ★ 代价：仅在标志为 false 时多一次焦点读取；正常路径（标志为 true）零开销。
+            if (!_commandLineNeedsEnglish)
+            {
+                IntPtr reclaimFocus;
+                if (!ShouldReclaimEnglishNow(out reclaimFocus)) return false;
+                ReclaimEnglishForIdlePrompt(reclaimFocus);
+            }
+
             return true;
+        }
+
+        /// <summary>
+        /// v59 自愈的**事实采集端**：询问「此刻是否应当把命令栏英文标志抢回来」，
+        /// 并把用于记录的焦点句柄带出去。
+        ///
+        /// 与 <see cref="ShouldCaptureKeyCore"/> 一样位于**每次按键**的路径上，
+        /// 因此只在"标志已被清"时被调用；正常路径（标志为 true）零额外开销。
+        /// </summary>
+        /// <param name="focus">真实焦点窗口；未取到时为 <see cref="IntPtr.Zero"/>。</param>
+        private bool ShouldReclaimEnglishNow(out IntPtr focus)
+        {
+            focus = IntPtr.Zero;
+
+            if (!_isEngaged) return false;
+            if (!_config.Enabled) return false;
+            if (!KeysTakeOverEnabled) return false;   // ★ v61：与 ShouldCaptureKeyCore 同一口径
+            if (!IsForegroundInAcad()) return false;
+
+            try { focus = CharInjector.GetRealFocusWindow(); }
+            catch (Exception) { return false; }
+            if (focus == IntPtr.Zero) return false;
+
+            bool isCmdLine = false, isEdit = false, isWpf = false;
+            try { isCmdLine = HostTextFrame.IsCommandLineWindow(focus); }
+            catch (Exception) { }
+            try { isEdit = FocusMonitor.IsEditBoxWindow(focus); }
+            catch (Exception) { }
+            try { isWpf = FocusMonitor.IsWpfHostClass(FocusMonitor.GetWindowClass(focus)); }
+            catch (Exception) { }
+
+            return ShouldReclaimEnglishForIdlePrompt(
+                _currentCommand != null, isCmdLine, isEdit, isWpf);
+        }
+
+        /// <summary>
+        /// v60 的**事实采集端**：命令执行期间，这一枚按键该不该从「放行物理键」
+        /// 改成「吞键 + 注入字符」？
+        ///
+        /// ═══════════════ 为什么需要它 ═══════════════
+        ///
+        /// `CommandKeyMode.PassThrough` 的契约是「命令执行期间物理键原样交给系统」，
+        /// 它敢放行是因为另有一条保险：<see cref="ImeWindowBypass"/> 会在命令期间
+        /// 用 <c>ImmAssociateContext(hwnd, IntPtr.Zero)</c> 解除 CAD 窗口与输入法的关联。
+        ///
+        /// ★ 但那条保险**只对 IMM32 输入法有效**。它动的是 IMM32 的 HIMC；
+        ///   而 **TSF 文本服务**的按键路由走 <c>ITfThreadMgr</c> / 文档管理器，
+        ///   **完全不看 HIMC** ⇒ 对纯 TSF 输入法（实测：豆包输入法，实现 DLL
+        ///   `System32\tsf-oime.dll`，注册表 `Keyboard Layouts` 命中 **0 项**、
+        ///   无任何 `.ime` 文件）这条保险是**结构性失效**的。
+        ///
+        /// ⇒ 于是放行出去的字母会**直接喂给中文态的输入法** ⇒ 组字 + 候选窗。
+        ///   用户报的症状正是它：`undo` 之后打二级命令 `a`、`DRAWORDER` 之后打 `b`，
+        ///   **第一次正常、删掉重打就变中文**。
+        ///
+        /// ═══════════════ 为什么是"第一次正常" ═══════════════
+        ///
+        /// 输入法要组字，得先有"组字上下文"——也就是焦点落在真正的编辑控件上。
+        /// 命令刚起来时焦点还在**绘图区**（`Afx:…:28:…`，不是 TSF 编辑上下文）：
+        ///   · 第 1 个选项字母 → 焦点在绘图区 ⇒ 输入法不组字，字母直达 AutoCAD ⇒ **正常**；
+        ///   · 但这个字母被 AutoCAD 回显进命令行输入框，**焦点随之移到命令行**
+        ///     （本机 v59 实测：每敲一个字母，焦点都在「命令栏 HwndWrapper」⇄
+        ///      「绘图区 Afx:…:28:…」之间抖一次）；
+        ///   · 删掉字母（Backspace）后焦点**仍留在命令行输入框** ⇒
+        ///     再打同一个字母时它落在一个 TSF 编辑上下文上 ⇒ 豆包组字 ⇒ **变中文**。
+        ///
+        /// 天正 RYBZ 之所以一直正常：它的二级命令提示留在**绘图区**上
+        /// （天正用 acedGrRead 一类通道读**原始按键**），焦点没被搬到命令行输入框，
+        /// 输入法也就没有组字上下文 ⇒ 物理键原样直达天正。
+        /// **⇒ 判据必须按"焦点在哪"分流，而不是一刀切放行 —— 这正是本条判据的全部内容。**
+        ///
+        /// ═══════════════ 判据本体 ═══════════════
+        ///
+        /// 全部满足才改通道（任何一个不满足都退回放行 = 今天的既有行为）：
+        ///   ① 档位确实是 PassThrough（其它档本来就是吞键 + 有自己的投递通道）；
+        ///   ② 旁路开关开着（`BypassImeDuringCommand == false` = 用户显式弃用
+        ///      "命令期间无视输入法"，那就连它的替代通道也不该擅自启用）；
+        ///   ③ 确实有命令在执行（空闲提示符本来就走注入字符，无需本判据）；
+        ///   ④ 不在文字编辑态（真的在改文字 —— 必须把输入权交还输入法打中文）；
+        ///   ⑤ 当前命令不是"需要中文"的（TEXT/MTEXT/天正文字… 见白名单）；
+        ///   ⑥ **焦点落在"输入法能组字的地方"**（唯一的分流条件，也是天正 RYBZ 的保命符）。
+        /// </summary>
+        /// <param name="mode">配置里的命令期间按键投递档。</param>
+        /// <param name="bypassImeDuringCommand">「命令期间无视输入法」开关（见
+        ///   <see cref="XimeConfig.BypassImeDuringCommand"/>）。</param>
+        /// <param name="currentCommand">当前执行的命令名；空闲时为 null/空。</param>
+        /// <param name="inTextEditMode">是否处于文字编辑态（<see cref="_inTextEditMode"/>）。</param>
+        /// <param name="commandIsChinese">当前命令是否需要中文
+        ///   （<c>MatchChinese(cmd) != None</c>）。</param>
+        /// <param name="focusIsComposableHost">
+        ///   真实焦点是否落在「输入法能组字的地方」——
+        ///   即 <see cref="FocusIsComposableHost"/>：命令栏链（含"命令自动完成"下拉，
+        ///   见 <see cref="HostTextFrame.IsCommandLineWindow"/>）**或** CAD 的 WPF 宿主
+        ///   （`HwndWrapper`，AutoCAD 的命令行输入框 / 动态输入浮层的实际载体）。
+        ///   ★ 判据故意用"是不是 CAD 的 WPF 面"而不是"具体是不是哪一个命令栏控件"：
+        ///     豆包只需拿到**一个 TSF 编辑上下文**就会组字，而 AutoCAD 里这样的面
+        ///     不止命令行输入框一个（动态输入、自动完成下拉……），逐个枚举必然漏。
+        ///     反过来，第三方（天正）真正承载文字输入的都是**原生 MFC**控件
+        ///     （`AfxWnd*` / `Afx:…`），以及 RYBZ 那种直接读**绘图区**原始按键的场景 ——
+        ///     两者都不是 WPF 宿主，因此这条判据**碰不到 RYBZ**。
+        /// </param>
+        /// <param name="focusOnForeignEditBox">
+        /// ★★★ v64：真实焦点是否落在**非命令栏的真编辑控件**上
+        /// （<see cref="ShouldYieldToForeignEditBox"/> 的口径，事实由
+        /// <see cref="FocusIsForeignEditBox"/> 采集）。
+        ///
+        /// ★ 为什么要单独一条：本判据的第 ⑥ 条只问"焦点是不是 WPF 宿主 / 命令栏链"，
+        ///   而**第三方插件的 WPF 界面同样是 `HwndWrapper`** —— 现场实测：X批注
+        ///   （纯 WPF，<c>XAnnotation.AutoCAD.dll</c> 引用 PresentationFramework）的批注
+        ///   对话框输入框，类名 <c>HwndWrapper[DefaultDomain;;…]</c>。
+        ///   于是这个框既"能组字"（该让输入法工作），又被判成"像命令栏"（该吞键注入）
+        ///   —— 两条结论打架，最终按后写的赢 ⇒ 用户在批注框里打不出中文。
+        ///   ⇒ 补这一条：**真编辑控件**一律否决"改注入字符"。
+        ///
+        /// ★ 为什么不影响命令栏：命令栏家族由
+        ///   <see cref="HostTextFrame.IsCommandLineWindow"/> 排除在"真编辑控件"之外
+        ///   （v64 起它的证据链必须含 CLI Palette，见 <c>AcadTextFrame.IsCommandLineFamily</c>）。
+        /// </param>
+        internal static bool ShouldSeizeCommandKeyAsChar(
+            XimeConfig.XimeCommandKeyMode mode,
+            bool bypassImeDuringCommand,
+            string currentCommand,
+            bool inTextEditMode,
+            bool commandIsChinese,
+            bool focusIsComposableHost,
+            bool focusOnForeignEditBox = false)
+        {
+            if (mode != XimeConfig.XimeCommandKeyMode.PassThrough) return false;
+            if (!bypassImeDuringCommand) return false;
+            if (string.IsNullOrEmpty(currentCommand)) return false;
+            if (inTextEditMode) return false;
+            if (commandIsChinese) return false;
+            // ★ v64：真编辑控件（第三方插件对话框 / 图层名称框…）—— 与"文字编辑态"同级否决
+            if (focusOnForeignEditBox) return false;
+            return focusIsComposableHost;
+        }
+
+        /// <summary>
+        /// <see cref="ShouldSeizeCommandKeyAsChar"/> 的**事实采集端**：就地取真实焦点、
+        /// 就地算"这条命令要不要中文"，然后把结论交给那条纯判据。
+        ///
+        /// ★ 调用点有两个（<see cref="ShouldCaptureKeyCore"/> 决策、<see cref="OnKeyCaptured"/>
+        ///   执行），共用本方法 —— 与 v59 的 <see cref="ShouldReclaimEnglishNow"/> 同一手法，
+        ///   避免"决策"与"执行"各写一遍、日后漂移。
+        ///
+        /// ★ 为什么顺序是"先探焦点、再问白名单"：焦点探针是唯一的分流条件，
+        ///   而白名单匹配是一次集合查找。命令执行期间每个字母都会调到这里，
+        ///   把**日常都会命中的分支**（焦点在绘图区 ⇒ 直接 false，正是天正 RYBZ 的常态）
+        ///   挡在最前面，白名单只在"真的要对命令栏写字母"时才查一次。
+        ///
+        /// ★ 副作用（刻意保留的一处）：若最终结论是"改走字符注入"，说明此刻命令栏必须是英文；
+        ///   而标志若为 false，只可能是被「误进文字编辑态」清掉的残留（v59 事故的另一种入口，
+        ///   焦点在下拉浮层上而非真正的文字编辑框）⇒ 就地修回。
+        ///   真正需要中文的命令在上面的 <c>commandIsChinese</c> 已被拦掉，不会被这里改写。
+        /// </summary>
+        private bool ShouldSeizeCommandKeyAsCharNow()
+        {
+            if (_config.CommandKeyMode != XimeConfig.XimeCommandKeyMode.PassThrough) return false;
+            if (!_config.BypassImeDuringCommand) return false;
+            if (string.IsNullOrEmpty(_currentCommand)) return false;
+            if (_inTextEditMode) return false;
+
+            if (!FocusIsComposableHost()) return false;   // ★ 天正 RYBZ 靠这一条活着
+
+            bool commandIsChinese =
+                _config.MatchChinese(_currentCommand) != XimeConfig.ChineseNeed.None;
+
+            // ★★★ v64：焦点在**非命令栏的真编辑控件**上（X批注这类第三方 WPF 面板、
+            //   图层名称框…）⇒ 既不吞键注入，也**不许**把 `_commandLineNeedsEnglish`
+            //   置回 true —— 上面那句 FocusIsComposableHost 会因为"是 WPF 宿主"而成立，
+            //   若不在这里否决，它就会一边说"能组字"一边把状态改成"要英文"。
+            //   事故与日志原文见 <see cref="ShouldSeizeCommandKeyAsChar"/> 的 v64 注释。
+            bool foreignEdit = FocusIsForeignEditBox();
+
+            if (!ShouldSeizeCommandKeyAsChar(
+                    _config.CommandKeyMode, _config.BypassImeDuringCommand,
+                    _currentCommand, _inTextEditMode, commandIsChinese,
+                    focusIsComposableHost: true, focusOnForeignEditBox: foreignEdit))
+                return false;
+
+            if (!_commandLineNeedsEnglish)
+            {
+                _commandLineNeedsEnglish = true;
+
+                int now = Environment.TickCount;
+                if (unchecked(now - _seizeLogTick) >= SeizeLogGapMs)
+                {
+                    _seizeLogTick = now;
+                    Note("命令期间改注入字符：命令=" + _currentCommand
+                         + "（焦点在命令栏 ⇒ 不放行物理键，避免 TSF 输入法组字）");
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 真实焦点当前是否落在**输入法能组字的地方** —— v60 判据里唯一的分流条件。
+        ///
+        /// 两条判据，命中任一即为"能组字"：
+        ///   ① <see cref="HostTextFrame.IsCommandLineWindow"/> —— 命令栏链。
+        ///      该谓词已包含 v59 补的两条（属主链匹配 + 与 <see cref="HostTextFrame.Resolve"/>
+        ///      同族），因此「命令自动完成下拉」这类 **WPF Popup（带属主的顶层窗口，
+        ///      GetParent() 返回 NULL）** 也能被正确认出来。
+        ///   ② <see cref="FocusMonitor.IsWpfHostClass"/>（`HwndWrapper`）—— CAD 的 WPF 宿主。
+        ///      ★ 为什么要带上它：豆包只需拿到**一个 TSF 编辑上下文**就会组字，而 AutoCAD 里
+        ///        这种面不止命令行输入框一个（**动态输入浮层**同样会在命令期间接管按键显示、
+        ///        且同样是 WPF）。只认 ① 那条父链会漏掉它们，漏掉就是"改不动"。
+        ///
+        /// ★ 为什么这两条碰不到天正 RYBZ：天正的二级命令提示留在**绘图区**
+        ///   （`Afx:…:28:…`，天正用 acedGrRead 一类通道读原始按键），既不在 CLI Palette
+        ///   父链上、也不是 WPF 宿主；天正真正承载文字输入的原生编辑控件同样不命中 ②。
+        ///
+        /// ★ 拿不到焦点（Zero）或异常 → 返回 false = **保守放行**（维持 PassThrough 原行为）。
+        ///   理由：本判据的失效方向必须是"少接管"，绝不能反过来把物理键无端吞掉 ——
+        ///   那会让第三方命令（天正 RYBZ 那类）直接失灵。
+        /// </summary>
+        private bool FocusIsComposableHost()
+        {
+            try
+            {
+                var f = CharInjector.GetRealFocusWindow();
+                if (f == IntPtr.Zero) return false;              // 读不到 ⇒ 保守放行
+
+                if (HostTextFrame.IsCommandLineWindow(f)) return true;
+
+                return FocusMonitor.IsWpfHostClass(FocusMonitor.GetWindowClass(f));
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// ★★★ v62 纯判据：焦点落在**外部文本编辑控件**上时，键盘钩子一律**不接管**。
+        ///
+        /// ═══════════ 事故现场（AutoCAD + 图层特性管理器，2026-10-14） ═══════════
+        ///
+        /// 用户原话：「AutoCAD 下 layer 命令 - 新建图层 - 修改新建图层名称，
+        ///            修改图层名称时候无法切换到中文，手动也无法切换。」
+        ///
+        /// 实测窗口结构（本机 AutoCAD 2022，探针 <c>_research/watch_layer_edit.py</c>）：
+        /// <code>
+        ///   焦点 = WindowsForms10.EDIT.app.0.1a4f6bb_r57_ad1   （标题「图层1」，75x23）
+        ///   父链 = … → AfxWnd100u "Layer Palette" → AfxWnd100u "Layer"
+        ///          → AfxControlBar100u "Layer"（**独立顶层窗口**）
+        /// </code>
+        ///
+        /// 因果链（每一环都有实测或代码依据，不是推测）：
+        ///   ① 该框是**真编辑框**，但类名不以 `Edit` 开头 ⇒ v62 之前
+        ///      <see cref="FocusMonitor.IsEditBoxClass"/> 判它"不是编辑控件"；
+        ///   ② 于是 <c>OnFocusObjectChanged</c> 的 `isEdit &amp;&amp; !isCommandLine` 不成立
+        ///      ⇒ **不进文字编辑态** ⇒ <c>_commandLineNeedsEnglish</c> 保持 true
+        ///      （空闲期由 `OnCommandEnded` / `ForceEnglish` 置起）；
+        ///   ③ 钩子于是把这个框里敲的**每个字母**都吞掉、改注入英文字母
+        ///      ⇒ 中文打不进；手动把输入法切到中文也没有用（字母照样被吞成英文）。
+        ///
+        /// ═══════════ 判据本体 ═══════════
+        ///
+        ///   是编辑控件 **且** 不在命令栏家族里 ⇒ 让路（返回 true）。
+        ///
+        ///   ★ 命令栏（含其自动完成下拉）由 <see cref="HostTextFrame.IsCommandLineWindow"/>
+        ///     排除在外，因此命令栏的英文接管**分毫不动** —— 实测命令栏输入框是
+        ///     `HwndWrapper[DefaultDomain;;…]`，父链含 `CLI Palette`。
+        ///   ★ 与 <see cref="ShouldSeizeCommandKeyAsChar"/> 的关系：那条只管
+        ///     「命令执行期间 + PassThrough 档」这一条路径；本条是**兜底**
+        ///     （覆盖空闲期，以及焦点事件没到达、标志仍是 true 的情形）。两条互补。
+        ///   ★ 失效方向：拿不到焦点 ⇒ 采集端返回 false ⇒ **照旧接管**（保守）。
+        ///     本判据最多"少修一点"，绝不会把命令栏该有的英文弄丢。
+        /// </summary>
+        internal static bool ShouldYieldToForeignEditBox(
+            bool focusIsEditBox, bool focusIsCommandLine, bool focusIsDynamicInput)
+        {
+            // ★★★ v63：动态输入框内部是**原生 `Edit`**（类名就叫 `Edit`），
+            //   单看类名与"真编辑框"完全同形。但它是**命令输入端**：
+            //   在那里敲的字母属于命令行，必须继续拦截并注入英文。
+            //   ⇒ 这一条必须写在最前面，优先级高于"是编辑框就让路"。
+            if (focusIsDynamicInput) return false;
+            return focusIsEditBox && !focusIsCommandLine;
+        }
+
+        /// <summary>
+        /// <see cref="ShouldYieldToForeignEditBox"/> 的**事实采集端**：
+        /// 就地取真实焦点，判断"此刻是不是落在外部编辑控件上"。
+        ///
+        /// ★ 调用点两处，口径完全一致（避免两边各自漂移）：
+        ///   · <see cref="ShouldCaptureKeyCore"/> —— 决定钩子要不要让路；
+        ///   · <see cref="SyncImeBypass"/> —— 决定「命令期间无视输入法」要不要动手。
+        ///     两处的失效后果是同一条：**用户在这些框里打不出中文**。
+        ///
+        /// ★ 代价：一次焦点读取 + 一次父链遍历（约 1~3 µs）。只在
+        ///   "用户正在往 CAD 里敲可打印字符"时才会走到，可忽略。
+        /// </summary>
+        private bool FocusIsForeignEditBox()
+        {
+            try
+            {
+                var f = CharInjector.GetRealFocusWindow();
+                if (f == IntPtr.Zero) return false;              // 读不到 ⇒ 保守（照旧接管）
+
+                // ★★★ v63：动态输入（DYN）提示框 = 命令输入端，**绝不让路**。
+                //   它内部是原生 `Edit`（类名 `Edit`），只看类名会把"敲命令"
+                //   误判成"在对话框里打中文" ⇒ 第 1 个字母之后就把键放给输入法。
+                //   实测见 HostTextFrame.IsDynamicInputWindow 的注释（含引擎日志原文）。
+                bool isDynInput;
+                try { isDynInput = HostTextFrame.IsDynamicInputWindow(f); }
+                catch (Exception) { isDynInput = false; }
+                if (isDynInput) return false;
+
+                bool isCmdLine;
+                try { isCmdLine = HostTextFrame.IsCommandLineWindow(f); }
+                catch (Exception) { isCmdLine = false; }
+                if (isCmdLine) return false;                     // 命令栏家族：必须保持英文接管
+
+                bool isEdit;
+                try { isEdit = FocusMonitor.IsEditBoxWindow(f); }
+                catch (Exception) { isEdit = false; }
+
+                return ShouldYieldToForeignEditBox(isEdit, isCmdLine, false);
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// v59 自愈的**执行端**：把命令栏英文标志抢回来，并（**限流**）留一条
+        /// 现场可查的日志。
+        ///
+        /// ★ 只动两个我们自己拥有的标志，**绝不碰用户输入法状态** ——
+        ///   与 <see cref="ForceEnglish"/> 的铁律一致（无视输入法模式只置标志）。
+        ///
+        /// ★ 为什么必须留日志：这条自愈一旦触发，说明焦点判定**当时判错了**。
+        ///   报障现场（用户机器）最需要的就是这一行 —— 它把"到底是哪个窗口
+        ///   把我们骗进了编辑态"钉下来（句柄 + 类名 + 当时的命令状态）。
+        /// </summary>
+        private void ReclaimEnglishForIdlePrompt(IntPtr focus)
+        {
+            _inTextEditMode = false;
+            _lastTextEditHost = IntPtr.Zero;
+            _commandLineNeedsEnglish = true;
+
+            int now = Environment.TickCount;
+            if (unchecked(now - _reclaimLogTick) < ReclaimLogGapMs) return;
+            _reclaimLogTick = now;
+
+            string cls;
+            try { cls = FocusMonitor.GetWindowClass(focus); }
+            catch (Exception) { cls = "(读不到)"; }
+
+            Note("误判自愈：命令栏英文标志曾被清（怀疑焦点 0x"
+                 + focus.ToInt64().ToString("X") + " 类名=" + cls
+                 + "），已抢回英文接管（命令=" + (_currentCommand ?? "-") + "）");
         }
 
         /// <summary>
@@ -4218,6 +4839,31 @@ namespace Xime.Core
                 //   再按 CommandKeyMode 把等价的按键事件送给 AutoCAD。
                 if (_currentCommand != null)
                 {
+                    // ★★★ v60：命令期间，若焦点在命令栏链上（输入法能在那里组字），
+                    //   走**字符注入**而不是重放真实按键 —— 见 ShouldSeizeCommandKeyAsChar。
+                    //
+                    //   为什么要单独一条通道：这里其余几档（PostKey / PostKeyFrame /
+                    //   ReplayVk）送出的都是**按键事件**，它们会进入 AutoCAD 的消息泵，
+                    //   于是 **TSF 的按键路由照样能看到** ⇒ 中文态输入法照样组字。
+                    //   而 SendInput(KEYEVENTF_UNICODE) 的 wVk = 0，最终只产生一个
+                    //   **WM_CHAR**：它不经过 TSF 的按键回调（TSF 只处理有真实 VK 的键），
+                    //   所以输入法**永远看不到**，命令栏拿到的却是一个货真价实的英文字符。
+                    //   —— 这正是空闲提示符那条通道，此处只是把同一手法用到命令期间的一小片场景。
+                    if (ShouldSeizeCommandKeyAsCharNow())
+                    {
+                        char chSeize = CharInjector.GetEnglishCharForKey(vkCode);
+                        if (chSeize == '\0')
+                        {
+                            if (_debugLog) Dbg("命令期间字符注入跳过：VK=0x" + vkCode.ToString("X2") + " 无英文映射");
+                            return false;
+                        }
+
+                        bool okSeize = CharInjector.SendUnicodeInput(chSeize);
+                        if (_debugLog) Dbg("命令期间字符注入 '" + chSeize + "' 结果=" + okSeize);
+                        if (okSeize) CapturedCount++;
+                        return okSeize;
+                    }
+
                     bool sent;
                     if (_config.CommandKeyMode == XimeConfig.XimeCommandKeyMode.PostKey ||
                         _config.CommandKeyMode == XimeConfig.XimeCommandKeyMode.PostKeyFrame)
@@ -4299,7 +4945,7 @@ namespace Xime.Core
         ///   · PostKeyFrame → **前台顶层窗口**（`GetForegroundWindow()`），
         ///     取不到时退回 **AutoCAD 主窗口**（`_focus.AcadMainWindow`）；
         ///   · 其余（PostKey）→ 真实焦点控件（`GetRealFocusWindow()`），
-        ///     拿不到时退回**命令栏控件**（`AcadTextFrame.Resolve()`）。
+        ///     拿不到时退回**命令栏控件**（`HostTextFrame.Resolve()`）。
         ///
         /// 两档目标不同的意义：PostKey 依赖"焦点控件可解析"，PostKeyFrame 不依赖 ——
         /// 焦点控件被第三方吃掉时，顶层窗口这一档仍能把按键送进消息泵。
@@ -4313,7 +4959,7 @@ namespace Xime.Core
                 return _focus.AcadMainWindow;
             }
             var target = CharInjector.GetRealFocusWindow();
-            return target != IntPtr.Zero ? target : AcadTextFrame.Resolve();
+            return target != IntPtr.Zero ? target : HostTextFrame.Resolve();
         }
 
         /// <summary>是否把「投递窗口消息」打给**前台顶层窗口**（PostKeyFrame 档），
@@ -4329,11 +4975,38 @@ namespace Xime.Core
             if (!_debugLog) return;
             if (!_isEngaged) { Dbg("  跳过: 未接管"); return; }
             if (!_config.Enabled) { Dbg("  跳过: 未启用"); return; }
-            if (_config.WorkMode != XimeWorkMode.IgnoreIme)
-            { Dbg("  跳过: 当前模式不接管按键（切换输入法模式/未知模式）"); return; }
+            if (!KeysTakeOverEnabled)
+            {
+                Dbg("  跳过: 当前模式不接管按键（" + _config.WorkMode
+                    + "；该输入法的中英态通道仍可用，不启用 v61 兜底）");
+                return;
+            }
             if (ShouldPassThroughKey(_config, _currentCommand))
-            { Dbg("  跳过: 命令执行期间完全放行（" + _currentCommand + "，PassThrough 模式）"); return; }
-            if (!_commandLineNeedsEnglish) { Dbg("  跳过: 命令栏不需英文"); return; }
+            {
+                // ★ v60：命令期间走到"放行"这一步有两种正当理由，日志要能区分：
+                //   ① 焦点不在"输入法能组字的地方"（绘图区，天正 RYBZ 的常态）
+                //      → 输入法没有组字上下文，放行是对的；
+                //   ② 焦点虽然能组字，但该命令需要中文 / 正处于文字编辑态
+                //      → 本来就必须把输入权交还输入法。
+                //   两种都正确，这里只说清是哪一种（本方法只在 >= Debug 档被调用，
+                //   多读一次焦点无妨；FocusIsComposableHost 是只读的，无副作用）。
+                Dbg("  跳过: 命令执行期间放行物理键（" + _currentCommand + "，PassThrough 档；"
+                    + (FocusIsComposableHost()
+                        ? "焦点在命令栏/WPF 宿主上，但该命令需中文/处于文字编辑态 ⇒ 交还输入法"
+                        : "焦点不在可组字控件上 ⇒ 输入法无从组字，按 v60 判据放行（天正 RYBZ 场景）")
+                    + "）");
+                return;
+            }
+            if (!_commandLineNeedsEnglish)
+            {
+                // ★ v59：与 ShouldCaptureKeyCore 共用同一套复核，防止"诊断"与"判据"漂移。
+                IntPtr f;
+                if (!ShouldReclaimEnglishNow(out f))
+                    Dbg("  跳过: 命令栏不需英文（复核确认焦点确在文字编辑控件上）");
+                else
+                    Dbg("  跳过: 命令栏不需英文（复核认为本应抢回 —— 说明本键在更早的判据上就放行了）");
+                return;
+            }
             // ★ v35：CapsLock 不再是一票否决的理由（见 ShouldCaptureKeyCore 的说明）
             if (NativeMethods.IsCapsLockOn()) Dbg("  注: CapsLock 开启（注入字符按大写计算）");
             if (NativeMethods.IsCtrlPressed() || NativeMethods.IsAltPressed() || NativeMethods.IsWinPressed()) { Dbg("  跳过: 组合键"); return; }
@@ -4370,8 +5043,17 @@ namespace Xime.Core
 
             // 命令栏（命令行面板）整条窗口链必须排除 —— 否则「敲命令」会被误判成
             // 「编辑文字」，命令栏将无法输入英文（灾难性回归）。
-            bool isCommandLine = AcadTextFrame.IsCommandLineWindow(hwnd);
+            bool isCommandLine = HostTextFrame.IsCommandLineWindow(hwnd);
             bool isEdit = FocusMonitor.IsEditBoxWindow(hwnd);
+
+            // ★★★ v63：动态输入（DYN）提示框 —— **必须先把它摘出来**。
+            //   它内部是一枚**原生 `Edit`**（类名就叫 `Edit`），与"真编辑框"完全同形，
+            //   但语义是**命令输入端**。不摘出来，下面两段都会把它误判：
+            //     · `isEdit && !isCommandLine` 成立 ⇒ EnterTextEditMode ⇒ SwitchToChinese；
+            //     · 钩子让路判据也会把它当成"外部文本编辑控件"。
+            //   两者叠加就是用户症状：第 1 个字母正常、**第 2 个起变中文**。
+            //   实测结构与日志原文见 HostTextFrame.IsDynamicInputWindow 的注释。
+            bool isDynInput = HostTextFrame.IsDynamicInputWindow(hwnd);
 
             // 类名读取是一次 P/Invoke + 一次字符串分配，只在开日志时才做
             if (_debugLog)
@@ -4379,10 +5061,34 @@ namespace Xime.Core
                 Dbg("焦点变化: 0x" + hwnd.ToInt64().ToString("X") +
                     " 类名=" + FocusMonitor.GetWindowClass(hwnd) +
                     " 是编辑框=" + isEdit +
-                    " 是命令栏=" + isCommandLine);
+                    " 是命令栏=" + isCommandLine +
+                    " 是动态输入=" + isDynInput);
             }
 
-            if (isEdit && !isCommandLine)
+            if (isDynInput)
+            {
+                // ★★★ v63：动态输入框 = **命令输入端**，绝不进文字编辑态。
+                //
+                //   ★ 但**不能无条件切英文**：文字类命令（TEXT / MTEXT / DTEXT…）在
+                //     动态输入框里输入的**就是文字内容本身**（DYN 打开时，
+                //     "输入文字:" 这类提示与内容都在这个框里）。那时切英文 = 灾难。
+                //   ⇒ 仍以命令白名单为准 —— 与 v55 闸门（RYBZ 那条）同一口径：
+                //     只有「空闲 / 非文字类命令」才把它当命令输入端处理。
+                bool needsChinese = _config.MatchChinese(_currentCommand)
+                                    != XimeConfig.ChineseNeed.None;
+                if (!needsChinese)
+                {
+                    // 若此前在真编辑框里留下的中文态还挂着，立刻收回来；
+                    // 否则至少把"命令栏需要英文"的标志置起（ForceEnglish 幂等、只置标志）。
+                    if (_inTextEditMode) ExitTextEditMode("焦点在动态输入框（命令输入端，非文字内容）");
+                    else ForceEnglish();
+                }
+                else if (_debugLog)
+                {
+                    Dbg("焦点在动态输入框，但命令 " + _currentCommand + " 是文字类 → 保持中文");
+                }
+            }
+            else if (isEdit && !isCommandLine)
             {
                 // ★★★ v55 闸门：命令执行期间，天正的**内部参数输入框**（实测类名 `Edit`）
                 //   绝不能被当成"用户要输入中文文字" —— 否则会在二级命令（A/E/D/F/X/Y）
@@ -4426,6 +5132,16 @@ namespace Xime.Core
             // ★ v42：无视模式下"等不到编辑控件"的确保中文 —— 此刻焦点刚落到
             //   编辑控件上，正是补做的最佳时机（比 500ms 轮询快得多）。
             TryFlushPendingEnsure("焦点事件");
+
+            // ★★★ v62：焦点一变就重新评估「命令期间无视输入法」。
+            //   焦点移进/移出**外部文本编辑控件**（图层特性管理器的名称框、
+            //   各类对话框输入框…）时必须**立刻**解除/还原那层关联：
+            //     · 移进去 ⇒ 必须还原，否则用户在那个框里打不出中文；
+            //     · 移出来 ⇒ 回到命令栏/绘图区，重新按判据决定。
+            //   500ms 轮询虽然也能兜住，但那意味着"点进名称框后最多 0.5 s 内
+            //   仍打不出中文"—— 用户手快就正好撞上（报告用户正是"改图层名"这种短操作）。
+            //   SyncImeBypass 幂等（状态已一致时直接返回、不写日志），可放心常调。
+            SyncImeBypass("焦点变化");
         }
 
         /// <summary>
@@ -4521,7 +5237,7 @@ namespace Xime.Core
             // 也不夺回英文接管 —— 否则会把用户正在输入的中文内容打断。
 
             // 命令开始时刷新一次命令栏控件缓存（可能刚切换文档）
-            AcadTextFrame.Invalidate();
+            HostTextFrame.Invalidate();
         }
 
         public void OnCommandEnded(string commandName, bool cancelledOrFailed)
@@ -4612,7 +5328,7 @@ namespace Xime.Core
                 var focus = CharInjector.GetRealFocusWindow();
                 inEdit = focus != IntPtr.Zero
                       && FocusMonitor.IsEditBoxWindow(focus)
-                      && !AcadTextFrame.IsCommandLineWindow(focus);
+                      && !HostTextFrame.IsCommandLineWindow(focus);
             }
             catch (Exception) { inEdit = true; }
 

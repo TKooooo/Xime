@@ -1,11 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net35;net48;net8.0-windows</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <AssemblyName>Xime.Core</AssemblyName>
     <RootNamespace>Xime.Core</RootNamespace>
-    <Version>1.0.2</Version>
+    <Version>1.0.5</Version>
     <!--
       ★ AssemblyVersion **刻意恒为 1.0.0.0**，不要跟着版本号改：
         它是 CLR 的"程序集身份"（name+version+culture），决定"这个程序集能不能复用"。
@@ -16,7 +16,7 @@
         对外显示用 <Version> / <FileVersion>，见 XimeApplication.Version。
     -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
+    <FileVersion>1.0.5.0</FileVersion>
     <Company>影子</Company>
     <Author>影子</Author>
     <Product>X输入法</Product>
@@ -41,10 +41,16 @@
     -->
   </PropertyGroup>
 
-  <!-- 让 AutoCAD 插件层与测试工具可以访问 Core 的内部类型（如 NativeMethods） -->
+  <!-- 让各宿主插件层与测试工具可以访问 Core 的内部类型（如 NativeMethods / HostTextFrame） -->
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Xime</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Xime.Zwcad</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Xime.GstarCad</_Parameter1>
     </AssemblyAttribute>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>XimeTest</_Parameter1>

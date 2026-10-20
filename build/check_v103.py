@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
-"""v1.0.2 交付前自查：产物、版本资源、关键特征串（正/反两面）。
+﻿# -*- coding: utf-8 -*-
+"""v1.0.5 交付前自查：产物、版本资源、关键特征串（正/反两面）。
 
-用法： python build/check_v102.py
+用法： python build/check_v103.py
 
 ★ 为什么"反证"和"正证"一样重要：这一版有三处是**撤除/收窄**语义
   （卸载不再动其它版本、Disengage 不再抹命令、旧实现删除），
@@ -15,7 +15,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
-TFMS = ["net35", "net48", "net8"]
+TFMS = ["AutoCAD2010-2012", "AutoCAD2013-2024", "AutoCAD2025-2026"]
 
 ok_all = True
 
@@ -42,7 +42,7 @@ def hit(blob, s):
 def main():
     print("")
     print("=" * 62)
-    print("  X输入法 v1.0.2 交付前自查")
+    print("  X输入法 v1.0.5 交付前自查")
     print("=" * 62)
 
     # ---------- 1) 三套产物 ----------
@@ -66,7 +66,7 @@ def main():
     for t in TFMS:
         d = os.path.join(DIST, t)
         raw = open(os.path.join(d, "Xime.dll"), "rb").read()
-        say(hit(raw, "1.0.2.0"), "%s Xime.dll 含 FileVersion 1.0.2.0" % t)
+        say(hit(raw, "1.0.5.0"), "%s Xime.dll 含 FileVersion 1.0.5.0" % t)
         say(hit(raw, "1.0.0.0"), "%s Xime.dll 仍含 AssemblyVersion 1.0.0.0（刻意保留）" % t)
     print("      注：AssemblyVersion 的「精确值」由 XimeTest config 断言")
     print("          （typeof(XimeConfig).Assembly.GetName().Version == 1.0.0.0），")
@@ -74,7 +74,7 @@ def main():
 
     # ---------- 3) 特征串（正/反） ----------
     print("\n[3] 关键特征串")
-    b48 = blob_of(os.path.join(DIST, "net48"))
+    b48 = blob_of(os.path.join(DIST, "AutoCAD2013-2024"))
 
     must_have = [
         ("PostKeyFrame", "第 4 档枚举成员（#Strings）"),
@@ -89,6 +89,21 @@ def main():
         ("默认无视输入法模式", "卸载提示：默认模式口径（v6：用户明确要求）"),
         ("四条合成通道一律不认", "配置模板：解释为何只能靠 PassThrough"),
         ("IgnoreIme   = 无视输入法模式（★ **当前默认**、用户明确要求）", "配置模板：默认模式口径（v6）"),
+        # ---------- ★★ v62（同日第三个 1.0.3 构建）----------
+        ("ShouldYieldToForeignEditBox", "★ v62 纯判据：焦点在外部编辑框 ⇒ 钩子让路（图层管理器改图层名打不出中文）"),
+        ("焦点在外部文本编辑控件上", "★ v62 日志文案：钩子让路的原因（照抄原文）"),
+        ("WindowsForms10.RICHEDIT", "★ v62 新增的类名前缀判据（WinForms 编辑控件）"),
+        # ---------- ★★ v63：动态输入（DYN）提示框 ----------
+        ("CAcDynInputWndControl", "★ v63 判据：动态输入提示框的 AutoCAD 内部名（照抄探针实测）"),
+        ("IsDynamicInputWindow", "★ v63 判据：动态输入框家族（链式，父链 + 属主链）"),
+        ("IsDynamicInputMarker", "★ v63 纯判据：动态输入框类名/标题识别（自测钉死，含 :1803: 反例）"),
+        ("焦点在动态输入框（命令输入端，非文字内容）", "★ v63 日志文案：从文字编辑态收回英文的 reason（照抄原文）"),
+        ("是动态输入=", "★ v63 焦点日志：每次焦点变化都报出这一位（现场唯一可查的入口）"),
+        # ---------- ★★ v64：命令栏判定必须含 CLI Palette ----------
+        ("IsCommandLineFamily", "★ v64 判据：命令栏家族（父链/属主链命中 CLI Palette；含 …Name 变体）"),
+        ("focusOnForeignEditBox", "★ v64 判据：ShouldSeizeCommandKeyAsChar 第 ⑦ 条（真编辑控件 ⇒ 否决改注入字符）"),
+        ("CLI Palette", "★ v64 家族特征串（命令栏判定的独立证据，断掉循环自证）"),
+
         ("<BypassImeDuringCommand>", "★ v6：配置模板里必须写出新开关的节点"),
         ("XIMEBYPASS", "★ v6：命令期间「无视输入法」诊断命令"),
         ("命令期间无视输入法", "★ v6：状态行 / 卸载提示 / 探针口径"),
@@ -132,9 +147,13 @@ def main():
     for t in TFMS:
         p = os.path.join(DIST, t, "安装说明.txt")
         txt = io.open(p, encoding="utf-8-sig").read()
-        say("X输入法 v1.0.2" in txt, "%s 标题为 v1.0.2" % t)
+        say("X输入法 v1.0.5" in txt, "%s 标题为 v1.0.5" % t)
         say("原样保留" in txt, "%s 卸载段说明其它版本原样保留" % t)
         say("所有版本**的自动加载注册项" not in txt, "%s 不再宣称清所有版本" % t)
+        # ★★ v62：说明书必须仍写明「默认 = 无视输入法模式」，且保留两种模式的口径
+        say("工作模式（两种，互斥" in txt, "%s 工作模式章节为两种模式（默认无视输入法）" % t)
+        say("默认工作模式 = **无视输入法模式**" in txt,
+            "%s 说明书口径：默认 = 无视输入法模式" % t)
 
     # ---------- 5) 默认值提醒 ----------
     print("\n[5] 与回归测试的分工（这里不做，避免两处各判一遍）")
@@ -147,17 +166,18 @@ def main():
     print("        + v∈{1..5} 端到端迁移断言守")
     print("        （已做负向对照：短路 key 迁移 → 恰好红 4；短路 work 迁移 → 恰好红 15；")
     print("          默认工作模式整体回退 → 恰好红 5）")
-    print("      · 「ImeWindowBypass.ShouldEngage 七条判据 + 执行器边界」")
+    print("      · 「ImeWindowBypass.ShouldEngage 八条判据（★ v62 新增第 ⑧ 条：")
+    print("        焦点在外部编辑框 ⇒ 不许解除关联）+ 执行器边界」")
     print("        由 XimeTest config 的 RunImeBypassTest 守")
-    print("        （已做负向对照：判据恒 false → 恰好红 1；判据恒 true → 恰好红 7；")
-    print("          默认 BypassImeDuringCommand 改 false → 恰好红 5）")
+    print("        （v1.0.3 基线做过负向对照：判据恒 false / 恒 true /")
+    print("          默认 BypassImeDuringCommand 改 false 三种短路都会当场变红）")
     print("      · ★ v6.2：「记命令名 + 同步旁路」不受『此刻是否已接管』限制 ——")
     print("        现场日志实测：接管状态随用户切窗一秒一组地抖，命令开始恰好落在")
     print("        『未接管』窗口里就会被提前 return 掉，整条命令都没有旁路（候选窗照弹）。")
     print("        旁路判据内部本来就查 _isEngaged，调用方再挡一道纯属重复且会掐死补做机会。")
     print("        守：`[旁路诊断]` 一行（本该生效却没生效时**始终落盘**，不依赖 XIMEDEBUG）")
     print("      · 「卸载只清当前版本 / Disengage 不抹命令 / 第 4 档投顶层窗口」")
-    print("        由 XimeTest config 的 v1.0.2 判据块断言，并已做负向对照（_negctl_v102.py）")
+    print("        由 XimeTest config 的 v1.0.3 判据块断言，并已做负向对照（_negctl_v103.py）")
     print("      · ★ v6.3：修掉「开机后第一条命令整条没有旁路（= 必须先敲一次 XIMESTATUS）」——")
     print("        根因是 NETLOAD 之后命令事件**根本没挂上**，只有用户敲过插件自己的命令才挂。")
     print("        现在 XimeApplication.Initialize() 末尾直接 EnsureHooked()；")

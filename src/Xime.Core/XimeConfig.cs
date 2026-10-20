@@ -73,8 +73,27 @@ namespace Xime.Core
         /// </summary>
         public bool Enabled { get; set; }
 
-        /// <summary>当前工作模式（默认「无视输入法模式」）。</summary>
-        public XimeWorkMode WorkMode { get; set; }
+        /// <summary>工作模式的存储字段。字段初值就钉成默认值（★ 默认 = 无视输入法模式）。</summary>
+        private XimeWorkMode _workMode = XimeWorkMode.IgnoreIme;
+
+        /// <summary>
+        /// 当前工作模式（★ 默认「无视输入法模式」）。
+        ///
+        /// ★ 为什么用"字段初值 = IgnoreIme"而不是裸的自动属性：
+        ///   枚举里 <see cref="XimeWorkMode.SwitchIme"/> = 0，正好是 CLR 的默认值，
+        ///   裸自动属性在"构造未跑完"或日后有人加了反序列化路径时会悄悄变成
+        ///   「切换输入法模式」。初值钉死 + 构造函数 / <see cref="ResetToFreshInstall"/>
+        ///   两处显式赋值，三处一致，默认值不会被枚举的数值顺序带偏。
+        ///
+        /// ★ 两种模式仍然**都可选**（用户上一轮要求撤回"只允许无视输入法"的锁定）：
+        ///   设置面板「模式」区二选一、命令 XIMEMODE 0|1 即时切换、配置文件照常读写。
+        ///   「加载后默认 = 无视输入法模式」由上面这三处默认值保证，与"能不能切"无关。
+        /// </summary>
+        public XimeWorkMode WorkMode
+        {
+            get { return _workMode; }
+            set { _workMode = value; }
+        }
 
         /// <summary>是否需要输入中文的命令白名单（小写比较）。</summary>
         public HashSet<string> ChineseCommands { get; private set; }

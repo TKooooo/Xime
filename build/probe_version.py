@@ -30,6 +30,110 @@ import glob
 # ── 版本 → 该版本**独有**的特征串 ──────────────────────────────────────
 # 顺序 = 从新到旧；判定时优先匹配最新的那一档。
 VERSIONS = [
+    # ★ v1.0.5 = v1.0.4+v64 的全部内容 + **版本号升到 1.0.5**
+    #   （`<Version>1.0.5</Version>` / `<FileVersion>1.0.5.0</FileVersion>`，
+    #     `AssemblyVersion` 仍刻意恒为 1.0.0.0）。
+    #   本档存在的意义只是"别把新产物认成旧版"。
+    #   ★ 判定串 = `1.0.5.0` + v64 的两条核心判据（v1.0.4 及更早不会有）。
+    ("v1.0.5", [
+        "1.0.5.0",                              # ★ FileVersion（版本资源，UTF-16）
+        "IsCommandLineFamily",                  # v64：命令栏家族纯判据（含 …Name 变体）
+        "focusOnForeignEditBox",                # v64：ShouldSeizeCommandKeyAsChar 的新参数
+        "ShouldYieldToForeignEditBox",          # v62：外部编辑框让路判据
+    ]),
+
+    # ★ v1.0.4 = v1.0.3+v63 的全部内容 + **版本号升到 1.0.4**
+    #   （`<Version>1.0.4</Version>` / `<FileVersion>1.0.4.0</FileVersion>`，
+    #     `AssemblyVersion` 仍刻意恒为 1.0.0.0）。行为与 v1.0.3+v63 完全一致，
+    #   本档存在的意义只是"别把新产物认成旧版"。
+    #   ★ 判定串用 `1.0.4.0`（UTF-16 版本资源里必有），再叠加 v63 的两条核心判据，
+    #     避免插件目录里别的第三方 DLL 恰好带 1.0.4.0 时误判。
+    ("v1.0.4", [
+        "1.0.4.0",                              # ★ FileVersion（版本资源，UTF-16）
+        "CAcDynInputWndControl",                # v63：DYN 提示框的内部名
+        "IsDynamicInputMarker",                 # v63：DYN 纯判据
+        "ShouldYieldToForeignEditBox",          # v62：外部编辑框让路判据
+    ]),
+
+    # ★ v1.0.3 + v63 = 修「开启动态输入（DYN）后，命令输入从第 2 个字母起变中文」：
+    #   实测（探针 `_research/watch_dyn_input.py` + 引擎日志，AutoCAD 2022）：
+    #     20D5A [POPUP] Afx:…:803:…  "CAcDynInputWndControl"  49x22
+    #       └─ 30D58 [CHILD] Edit 「l」   ← **原生 Edit**，与真编辑框完全同形
+    #   ⇒ v62 的「isEdit && !isCommandLine ⇒ 进文字编辑态」把它判成"在编辑文字"
+    #     ⇒ `SwitchToChinese` ⇒ 标志清零 ⇒ 第 2 个字母起放行给输入法（用户症状原话）。
+    #   ⇒ 新增纯判据 `AcadTextFrame.IsDynamicInputMarker`（`Afx:…:803:…` / `CAcDynInputWndControl`）
+    #     + 链式 `IsDynamicInputWindow`；`ShouldYieldToForeignEditBox` 新增第三个参数
+    #     `focusIsDynamicInput`（动态输入框 ⇒ **永不让路**）；`OnFocusObjectChanged`
+    #     新增 v63 分支（不进文字编辑态，但仍按命令白名单给文字类命令让路）。
+    #   ★ 专有串（v1.0.3+v62 及更早不会有）：
+    ("v1.0.3+v63", [
+        "CAcDynInputWndControl",                # ★ DYN 提示框的 AutoCAD 内部名
+        "IsDynamicInputWindow",                 # ★ 新判据（链式）
+        "IsDynamicInputMarker",                 # ★ 新判据（纯函数）
+        "焦点在动态输入框（命令输入端，非文字内容）",   # 退出编辑态的 reason 文案（照抄原文）
+    ]),
+    # ★ v1.0.3 + v62（同日第三个 1.0.3 构建）= 两件事（用户两条要求）：
+    #   ① 修「AutoCAD 的 LAYER 命令 → 新建图层 → 改图层名，打不出中文，手动也切不了」：
+    #      实测（探针 `_research/watch_layer_edit.py`，AutoCAD 2022）图层特性管理器里那个
+    #      **名称编辑框**类名是 `WindowsForms10.EDIT.app.0.1a4f6bb_r57_ad1`
+    #      （父链 → `AfxWnd100u "Layer Palette"` → `AfxWnd100u "Layer"` → `AfxControlBar100u`，
+    #       独立顶层窗口）。它**不以 "Edit" 开头**，所以 `FocusMonitor.IsEditBoxClass` 一直判它
+    #      "不是编辑控件" ⇒ 焦点落在它上面时**不进文字编辑态** ⇒ `_commandLineNeedsEnglish`
+    #      保持 true ⇒ 键盘钩子把这个框里敲的每个字母都吞掉、改注入英文字母 ⇒ 中文打不进、
+    #      手动切输入法也没用。
+    #      ⇒ `FocusMonitor.IsEditBoxClass` 新增 `WindowsForms10.EDIT` / `WindowsForms10.RICHEDIT`；
+    #        新增纯判据 `ShouldYieldToForeignEditBox`（是编辑控件且不在命令栏族 ⇒ 钩子让路），
+    #        并在按键路径与旁路判据上各接一处（`ImeWindowBypass.ShouldEngage` 新增第 ⑧ 条）；
+    #        `OnFocusObjectChanged` 焦点一变就重评估旁路（不再等 500ms 轮询）。
+    #   ② 工作模式**仍可切换**（用户随后要求撤回"只允许无视输入法"的锁定）：
+    #      面板「切换输入法模式」恢复可选、`XIMEMODE 1` 恢复切换、配置文件照常读写；
+    #      但**加载后默认 = 无视输入法模式**保持不变（`_workMode` 字段初值 +
+    #      构造函数 + `ResetToFreshInstall()` 三处一致，比裸自动属性更稳 ——
+    #      因为枚举里 `SwitchIme = 0` 正好是 CLR 默认值）。
+    #   ★ 专有串（v1.0.3+v61 及更早不会有）：
+    ("v1.0.3+v62", [
+        "ShouldYieldToForeignEditBox",          # ★ 新纯判据（外部编辑框让路）
+        "焦点在外部文本编辑控件上",                # 日志文案（照抄原文）
+        "WindowsForms10.RICHEDIT",              # ★ 新增的类名前缀判据（照抄原文）
+    ]),
+    # ★ v1.0.3 + v61（同日第二个 1.0.3 构建）= 再修一件事：
+    #   **切换输入法模式下「命令行必须是英文」的钩子兜底**。
+    #   现场（报障用户 AutoCAD 2024 + 搜狗输入法，2026-10-14 14:17 会话日志）：
+    #     整场测试跑在**切换输入法模式**下（Disengage 全是该模式措辞、
+    #     `需要中文（文字输入）` 4 次、`需要英文（命令栏）` 0 次），
+    #     而 `ShouldCaptureKeyCore` 的第一道闸门是
+    #     `if (_config.WorkMode != XimeWorkMode.IgnoreIme) return false;`
+    #     ⇒ 切换模式下钩子一个键都不接管，v59/v60 的修复在该模式下**是死代码**；
+    #     该模式的英文完全押在"真的把输入法切到英文"上，而 v48 已判定这台机器的
+    #     中英态通道不可信（回读恒为同一值、英语读数 0 次）⇒ 切换只能靠猜。
+    #     视频里同一模式下两个方向都会错：命令行敲 `tt` 弹搜狗候选窗（该英文成中文）、
+    #     在位文字编辑器里敲 `doubaoshurufa` 原样是拉丁字母（该中文成英文）。
+    #   ⇒ 新增纯判据 `ShouldTakeOverKeys(mode, switchChannelUnusable)`：
+    #     通道不可信时，切换模式也退回**钩子直接注入**（与输入法状态无关，确定性成立）。
+    #   ★ 专有串（上一个 1.0.3 构建不会有）：
+    ("v1.0.3+v61", [
+        "ShouldTakeOverKeys",              # ★ 新纯判据（本模式下钩子是否接管按键）
+        "兜底已启用（v61）",                 # 日志文案（照抄原文）
+        "键盘钩子直接注入",                  # 日志文案（照抄原文）
+    ]),
+    # ★ v1.0.3 = 两件事：
+    #   ① 版本号对外显示 v1.0.3（`<FileVersion>1.0.3.0</FileVersion>`；`AssemblyVersion` 仍恒 1.0.0.0）；
+    #   ② 修「AutoCAD 平台 + 豆包输入法（纯 TSF 文本服务，无 IMM32 键盘布局、无 .ime）」下
+    #      **命令名 / 二级命令被输入法吃掉变中文**：
+    #      · v59「误判自愈」—— 命令栏英文标志被 CAD 的 WPF 浮层（命令自动完成下拉等，
+    #        类名 `HwndWrapper`、父链拿不到 `CLI Palette`）误清时，当场按**真实焦点**复核并抢回接管；
+    #      · v60「焦点分流」—— 命令期间按下的字母：焦点若在**可组字控件**（命令栏链 / CAD 的
+    #        WPF 宿主）上，改走**吞键 + 注入 WM_CHAR**（TSF 按键回调看不到这枚键）；
+    #        焦点在绘图区（天正 `acedGrRead` 场景）则**照旧放行物理键**，RYBZ 二级命令行为不变。
+    #   ★ 判据/文案专有串（老版本 DLL 不会有）：
+    #     `ShouldReclaimEnglishForIdlePrompt` / `ShouldSeizeCommandKeyAsChar`（#Strings）
+    #     + 「误判自愈」/「命令期间改注入字符」（#US）。
+    ("v1.0.3", [
+        "ShouldReclaimEnglishForIdlePrompt",   # ★ 新纯判据（空闲期误判自愈）
+        "ShouldSeizeCommandKeyAsChar",         # ★ 新纯判据（命令期间焦点分流）
+        "误判自愈：命令栏英文标志曾被清",         # 日志文案（照抄原文）
+        "命令期间改注入字符",                    # 日志文案（照抄原文）
+    ]),
     # ★ v1.0.2 = 三件事（用户三条要求）：
     #   ① 「卸载」**只清当前这一个 AutoCAD 版本**的自动加载注册项 ——
     #      旧实现遍历 R18.0~R25.2 全版本删，用户在 2022 里卸一次就把 2014 的加载也干掉了

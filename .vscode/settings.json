@@ -5,16 +5,19 @@
   //  与机器相关的路径一律不进这里（SDK 位置走仓库根 local.props）。
   // ============================================================
 
-  // C# Dev Kit 靠它装载三个工程（Xime.Core / Xime.Acad / Xime.CliTest）
+  // C# Dev Kit 靠它装载全部工程
+  // （Xime.Core / Xime.Plugin(共享) / Xime.Acad / Xime.Zwcad / Xime.GstarCad / Xime.CliTest）
   "dotnet.defaultSolution": "Xime.sln",
 
   // ---- 把构建产物从资源管理器与全局搜索里藏掉 ----------------
-  // 三个工程的产物分别落在 build/acad、build/core、dist 和各自 bin/obj
-  // （见各 csproj 的 BaseOutputPath），不排除的话搜索会被 DLL 淹没。
+  // 各工程的产物分别落在 build/acad、build/zwcad、build/gstarcad、build/core、
+  // dist 和各自 bin/obj（见各 csproj 的 BaseOutputPath），不排除的话搜索会被 DLL 淹没。
   "files.exclude": {
     "**/bin": true,
     "**/obj": true,
     "build/acad": true,
+    "build/zwcad": true,
+    "build/gstarcad": true,
     "build/core": true,
     "build/shots": true,
     "build/ApplicationPlugins": true,
@@ -24,6 +27,8 @@
     "**/bin": true,
     "**/obj": true,
     "build/acad": true,
+    "build/zwcad": true,
+    "build/gstarcad": true,
     "build/core": true,
     "build/shots": true,
     "dist": true

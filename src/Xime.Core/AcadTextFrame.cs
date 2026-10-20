@@ -161,10 +161,46 @@ namespace Xime.Core
             //   当成命令栏控件**缓存 3 秒**，于是：
             //     · 投递目标错（注入的字符进不了命令栏）；
             //     · IME 靶点错（绘图区没有 IME 上下文，读数恒为默认的「中文」）。
+            //
+            // ★★★ v64：**"有焦点 + 像输入框"不等于"它就是命令栏"** —— 还必须在
+            //   CLI Palette 家族里（见 <see cref="IsCommandLineFamily"/>）。
+            //
+            //   ─────────── 事故现场（2026-10-19）───────────
+            //   用户原话：「本机上在X批注内需要输入中文时切换输入法失效，手动也无法
+            //   切换到中文输入」。引擎日志 <c>%TEMP%\xime_engine.log</c>：
+            //   <code>
+            //     16:24:14.211  CommandWillStart: X_PZ_DRAW
+            //     16:24:15.297  焦点变化: 0x1014DC 类名=HwndWrapper[DefaultDomain;;e267…]
+            //                   是编辑框=True 是命令栏=True 是动态输入=False   ← ★ 这里
+            //     16:24:16.353  按键 vk=0x43(C) 拦截=True 需英文=是 编辑态=否
+            //     16:24:16.368  命令期间字符注入 'c' 结果=True
+            //   </code>
+            //   X批注（第三方 .NET 插件，纯 WPF）的批注对话框输入框就是这个
+            //   <c>HwndWrapper</c> —— 它**不是**命令行输入框，却被判成「是命令栏=True」。
+            //
+            //   为什么会这样（**循环自证**）：
+            //     ① 本方法第一步就用"当前焦点"当命令栏 ⇒ 焦点在 X批注上时，
+            //        <c>Resolve()</c> 返回的就是 X批注自己；
+            //     ② <see cref="IsCommandLineWindow"/> 的"与已解析命令栏同族"分支
+            //        拿 <c>hwnd == Resolve()</c> 作为肯定证据 ⇒ 恒真。
+            //   ⇒ 任何"有焦点、又长得像输入框"的第三方面板都会被**自己证明**成命令栏。
+            //
+            //   后果（与 v62 图层改名那次**同一个失效模式**）：
+            //     · <c>ShouldYieldToForeignEditBox(edit=true, cmdLine=true)</c> = false
+            //       ⇒ 钩子不让路 ⇒ 字母被吞、改注入英文 ⇒ **中文打不进**；
+            //     · <c>ImeWindowBypass</c> 的第 ⑧ 条闸门同样看到 cmdLine=true
+            //       ⇒ 命令期间**照旧解除窗口与输入法的关联** ⇒ 手动切中文也没用。
+            //   ⇒ 修在**源头**：焦点只有落在 CLI Palette 家族里，才配当命令栏候选。
+            //   ★ 收窄到 **WPF 宿主**（`HwndWrapper`）才做这道验身，其余类名一律放行 ——
+            //     因为"自证"这条环只在 `HwndWrapper` 上闭合（见 <see cref="IsCommandLineWindow"/>
+            //     里那道 `self.IndexOf("HwndWrapper")` 闸门）。原生 `Edit`
+            //     （动态输入框 / 天正对话框）、`WindowsForms10.EDIT`（图层名称框）
+            //     的行为**逐字节保持 v1.0.4**，不借这次修复顺手改动别人。
             try
             {
                 var focus = CharInjector.GetRealFocusWindow();
-                if (focus != IntPtr.Zero && IsTextInputHost(focus) && !IsTextWindow(focus))
+                if (focus != IntPtr.Zero && IsTextInputHost(focus) && !IsTextWindow(focus)
+                    && WpfHostIsCommandLineFamily(focus))
                     return focus;
             }
             catch (Exception) { }
@@ -247,6 +283,19 @@ namespace Xime.Core
         ///   误缓存为命令栏，导致这里把编辑框当成命令栏排除 → 编辑态永远进不去。
         ///   因此 Resolve() 只作为**辅助**判据（相等即命令栏），
         ///   主判据始终是父链上的 CLI Palette 特征。
+        ///
+        /// ★★★ v59 补充（豆包输入法事故的真根因）：
+        ///   只走**父链**是不够的。AutoCAD 的命令栏派生出来的 WPF 浮层
+        ///   （实测最常见的就是「命令自动完成」下拉框：用户敲下第一个字母后
+        ///    立刻弹出，类名 `HwndWrapper[…]`、尺寸 320×68 → 320×214）
+        ///   是**带属主的顶层窗口** —— `GetParent()` 对它返回 NULL，
+        ///   父链里**永远**找不到 "CLI Palette"。
+        ///   而 `FocusMonitor.IsEditBoxClass` 又把 `HwndWrapper` 一律当编辑框，
+        ///   两条叠起来 ⇒ 焦点一落到这个下拉框，引擎就 `EnterTextEditMode`
+        ///   ⇒ `SwitchToChinese` ⇒ 命令栏英文标志被清 ⇒ **从第二个字母起，
+        ///   物理键不再被吞，直接喂给输入法**（用户症状：单字母命令正常、
+        ///   两字母及以上变中文）。
+        ///   ⇒ 因此这里补两条：**属主链**匹配 + **与已解析命令栏同一家族**。
         /// </summary>
         public static bool IsCommandLineWindow(IntPtr hwnd)
         {
@@ -254,22 +303,13 @@ namespace Xime.Core
             try
             {
                 // ---- 主判据：沿父链匹配 CLI Palette（不受 Resolve 缓存影响）----
-                var cur = hwnd;
-                int guard = 0;
-                while (cur != IntPtr.Zero && guard++ < 12)
-                {
-                    var cls = GetClassNameSafe(cur);
-                    if (cls.IndexOf("CLI Palette", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return true;
+                if (ChainHitsCliPalette(hwnd, useOwner: false)) return true;
 
-                    var title = GetWindowTextSafe(cur);
-                    if (title.IndexOf("CLI Palette", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return true;
+                // ---- v59 判据 ①：父链走不通时，沿**属主链**再找一次 ----
+                //   （命令自动完成下拉、输入法宿主等"带属主的顶层浮层"走这条）
+                if (ChainHitsCliPalette(hwnd, useOwner: true)) return true;
 
-                    cur = NativeMethods.GetParent(cur);
-                }
-
-                // ---- 辅助判据：与已解析命令栏句柄相等 ----
+                // ---- 辅助判据：与已解析命令栏同族 ----
                 //   仅当该句柄确实带命令栏特征（WPF 宿主 HwndWrapper）时才采信，
                 //   避免 Resolve() 把天正编辑框误缓存成命令栏而带来的误判。
                 //
@@ -282,12 +322,244 @@ namespace Xime.Core
                 if (self.IndexOf("HwndWrapper", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     var cmdLine = Resolve();
-                    if (cmdLine != IntPtr.Zero && hwnd == cmdLine) return true;
+
+                    // ★★★ v64：**解析结果本身也要被验明正身**。
+                    //
+                    //   否则这里是一条**循环自证**：
+                    //     Resolve() 第 ① 步拿"当前焦点"当命令栏
+                    //       ⇒ 焦点在第三方 WPF 面板（X批注）上时，解析结果就是它自己
+                    //       ⇒ `hwnd == cmdLine` 恒真 ⇒ 任何 WPF 面板都被判成命令栏。
+                    //   现场后果见 <c>ResolveCore</c> 的 v64 注释（中文打不进 + 手动切无效）。
+                    //
+                    //   加上 <see cref="IsCommandLineFamily"/> 之后，证据链变成两条**独立**的：
+                    //     "在 CLI Palette 家族里" 与 "能走到命令栏"，缺一不可。
+                    if (cmdLine != IntPtr.Zero && IsCommandLineFamily(cmdLine))
+                    {
+                        if (hwnd == cmdLine) return true;
+                        // ★ v59：不要求**相等**，只要求"能走到命令栏" ——
+                        //   覆盖"命令栏的派生浮层"以及"命令栏的子孙控件"。
+                        if (ChainReaches(hwnd, cmdLine)) return true;
+                    }
                 }
 
                 return false;
             }
             catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// ★★★ v64：纯判据 —— 一对「类名 + 标题」是否带命令行面板的家族特征。
+        ///
+        /// 抽成纯字符串判据的理由与 <see cref="FocusMonitor.IsEditBoxClass"/> /
+        /// <see cref="IsDynamicInputMarker"/> 相同：这条判据一旦放宽，现场表现是
+        /// "第三方 WPF 输入框打不进中文"，靠注释守不住，必须有可执行断言
+        /// （XimeTest 的 v64 组）。
+        ///
+        /// 判据只有一条：类名或标题里出现 <c>CLI Palette</c>。
+        /// 实测（AutoCAD 2022 中文版，探针 <c>_research/watch_focus_poll.py</c>）：
+        /// <code>
+        ///   命令行输入框 HwndWrapper[…] ← AfxWnd100u「CLI Palette」
+        ///                               ← AfxWnd100u「CLI PaletteSet」
+        ///                               ← AfxControlBar100u「CLI PaletteSet」
+        ///   批注面板     HwndWrapper[…] ← AfxWnd100u「X-批注」   ← 无 CLI Palette
+        /// </code>
+        /// ★ 为什么认"标题"而不只认类名：<c>AfxWnd100u</c> 是 MFC 通用窗口类，
+        ///   图层管理器、批注面板、命令行面板**共用同一个类名**，只有标题能区分。
+        /// </summary>
+        internal static bool IsCommandLineFamilyName(string cls, string title)
+        {
+            const StringComparison IC = StringComparison.OrdinalIgnoreCase;
+            if (!string.IsNullOrEmpty(cls) && cls.IndexOf("CLI Palette", IC) >= 0) return true;
+            if (!string.IsNullOrEmpty(title) && title.IndexOf("CLI Palette", IC) >= 0) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 沿父链（<c>GetParent</c>）或属主链（<c>GetWindow(GW_OWNER)</c>）
+        /// 查找 "CLI Palette" 特征（v59）。
+        /// </summary>
+        private static bool ChainHitsCliPalette(IntPtr hwnd, bool useOwner)
+        {
+            var cur = hwnd;
+            int guard = 0;
+            while (cur != IntPtr.Zero && guard++ < 12)
+            {
+                if (IsCommandLineFamilyName(GetClassNameSafe(cur), GetWindowTextSafe(cur)))
+                    return true;
+
+                cur = useOwner
+                    ? NativeMethods.GetWindow(cur, NativeMethods.GW_OWNER)
+                    : NativeMethods.GetParent(cur);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// ★★★ v64：<paramref name="hwnd"/> 是否**真的**处在命令行面板家族里
+        /// （父链或属主链能走到 "CLI Palette"）。
+        ///
+        /// 两个调用点，都是为了让"命令栏"这个结论**有独立证据**：
+        ///   · <see cref="ResolveCore"/> 第 ① 步 —— 焦点只有落在命令栏家族里才配当
+        ///     命令栏候选，否则交给 ② 的 acad.exe 导出（权威通道）；
+        ///   · <see cref="IsCommandLineWindow"/> 的"同族"分支 —— 解析结果本身也要过这一关，
+        ///     否则"焦点 ⇒ 解析结果 ⇒ 焦点是命令栏"就是一条**循环自证**。
+        ///
+        /// ★ 为什么不会误伤**真正的**命令栏：实测命令栏输入框的父链里就有
+        ///   <c>AfxWnd100u「CLI Palette」</c>；即便某个版本换了外壳，还有 ② 那条
+        ///   <c>AcadGetTextFrameHandle</c> 权威通道兜底。反过来，失效方向是
+        ///   "少认一个命令栏"（后果：不吞键、交给输入法）——比"把第三方输入框
+        ///   认成命令栏"（后果：用户打不出中文）**轻得多**。
+        /// </summary>
+        internal static bool IsCommandLineFamily(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            try
+            {
+                return ChainHitsCliPalette(hwnd, useOwner: false)
+                    || ChainHitsCliPalette(hwnd, useOwner: true);
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// ★★★ v64：<paramref name="hwnd"/> 若为 **WPF 宿主**（<c>HwndWrapper</c>），
+        /// 必须证明自己在 CLI Palette 家族里；其它类名一律放行。
+        ///
+        /// ★ 为什么只卡 WPF 宿主：v59 起 <see cref="IsCommandLineWindow"/> 只对
+        ///   <c>HwndWrapper</c> 开"与已解析命令栏同族"这条捷径，**循环自证**也只在
+        ///   这条捷径上闭合（焦点 ⇒ 解析结果 ⇒ 焦点是命令栏）。
+        ///   原生 <c>Edit</c>（动态输入框 / 天正对话框）与
+        ///   <c>WindowsForms10.EDIT</c>（图层名称框）根本不走那条捷径，
+        ///   因此**不需要也不应该**在这里动它们 —— 保持 v1.0.4 行为逐字节不变。
+        /// </summary>
+        private static bool WpfHostIsCommandLineFamily(IntPtr hwnd)
+        {
+            var cls = GetClassNameSafe(hwnd);
+            if (cls.IndexOf("HwndWrapper", StringComparison.OrdinalIgnoreCase) < 0)
+                return true;
+            return IsCommandLineFamily(hwnd);
+        }
+
+        /// <summary>
+        /// <paramref name="hwnd"/> 的父链/属主链能否走到 <paramref name="target"/>（v59）。
+        /// 每一跳都优先走父、走不通再走属主 —— 恰好覆盖
+        /// 「子控件 → 命令栏面板」与「popup → 属主命令栏」两种层次。
+        /// </summary>
+        private static bool ChainReaches(IntPtr hwnd, IntPtr target)
+        {
+            if (target == IntPtr.Zero) return false;
+            var cur = hwnd;
+            int guard = 0;
+            while (cur != IntPtr.Zero && guard++ < 12)
+            {
+                if (cur == target) return true;
+                var p = NativeMethods.GetParent(cur);
+                cur = p != IntPtr.Zero ? p : NativeMethods.GetWindow(cur, NativeMethods.GW_OWNER);
+            }
+            return false;
+        }
+
+        // ==================== v63：动态输入（DYN）提示框 ====================
+
+        /// <summary>动态输入提示框的 AutoCAD 内部名（实测 2022 中文版 / 英文版都是它）。</summary>
+        private const string DynInputToken = "CAcDynInputWndControl";
+
+        /// <summary>
+        /// 动态输入提示框的**窗口类 ID 段**：`Afx:00007FF71BC60000:803:…`。
+        ///
+        /// ★ 为什么不只靠标题：<c>GetWindowText</c> 可能被外部工具改写 / 为空；
+        ///   而类名里的 `:803:` 是 MFC 注册窗口时写死的控件 ID，稳定得多。
+        /// ★ 为什么不写成 `"803"`：同一棵窗口树里还有 `Afx:…:1803:…`
+        ///   （探针实测存在），裸子串会误命中 ⇒ **必须带两侧冒号**。
+        /// </summary>
+        private const string DynInputClassId = ":803:";
+
+        /// <summary>
+        /// ★★★ v63：纯判据 —— 这一层窗口是不是**动态输入（DYN）提示框**。
+        ///
+        /// 用途见 <see cref="IsDynamicInputWindow"/>。抽成纯函数的理由与
+        /// <see cref="FocusMonitor.IsEditBoxClass"/> 相同：这条判据一旦失效，
+        /// 现场表现是"开启动态输入后，敲命令从第 2 个字母起变中文"，
+        /// 靠注释守不住，必须有可执行断言（XimeTest 的 v63 组）。
+        /// </summary>
+        /// <param name="cls">窗口类名（<c>GetClassName</c>）。</param>
+        /// <param name="title">窗口标题（<c>GetWindowText</c>）。</param>
+        internal static bool IsDynamicInputMarker(string cls, string title)
+        {
+            if (!string.IsNullOrEmpty(title) &&
+                title.IndexOf(DynInputToken, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            if (!string.IsNullOrEmpty(cls))
+            {
+                if (cls.IndexOf(DynInputToken, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+
+                // `Afx:` 前缀 + `:803:` 段。两个条件缺一不可：
+                // 只认 ID 会把别的 MFC 窗口算进来，只认前缀则毫无区分度。
+                if (cls.StartsWith("Afx:", StringComparison.OrdinalIgnoreCase) &&
+                    cls.IndexOf(DynInputClassId, StringComparison.Ordinal) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// ★★★ v63：<paramref name="hwnd"/> 是否属于**动态输入（DYN）提示框家族**。
+        ///
+        /// ─────────── 事故现场（2026-10-19）───────────
+        /// 用户原话：「一旦开启动态输入，输入的命令是在光标边上的时候，输入第一个
+        /// 字母后第一个字母会自动变成大写，输入第 2 个以后的字母都变成中文。」
+        ///
+        /// 探针实测（AutoCAD 2022，<c>_research/watch_dyn_input.py</c>）+ 引擎日志
+        /// <c>%TEMP%\xime_engine.log</c> 得到完整结构与时序：
+        /// <code>
+        ///   20D5A [POPUP] Afx:00007FF71BC60000:803:…  "CAcDynInputWndControl"  49x22
+        ///     └─ 30D58 [CHILD] Edit                    「l」                      （原生 Edit！）
+        /// </code>
+        /// <code>
+        ///   09:22:11.486  按键 vk=0x4C(L) 拦截=True 需英文=是 编辑态=否
+        ///   09:22:11.506  SendUnicodeInput 'l' 结果=True
+        ///   09:22:11.514  焦点变化: 0x20D5A 类名=Afx:…:803:… 是编辑框=False 是命令栏=False
+        ///   09:22:11.516  焦点变化: 0x30D58 类名=Edit      是编辑框=True  是命令栏=False
+        ///   09:22:11.516  SwitchToChinese: 仅清标志（停止拦截，交还给输入法）
+        ///   09:22:11.516  进入文字编辑态（焦点在编辑框）→ 允许中文
+        ///   09:22:16.758    跳过: 焦点在外部文本编辑控件上（非命令栏）⇒ 让路给输入法
+        ///   09:22:16.758  按键 vk=0x49(I) 拦截=False 命令=- 需英文=否 编辑态=是
+        /// </code>
+        ///
+        /// 因果链：动态输入框内部是**原生 `Edit`**（类名就叫 `Edit`），
+        /// 而 <see cref="IsCommandLineWindow"/> 又不认它（它不是 CLI Palette 家族）
+        /// ⇒ `isEdit &amp;&amp; !isCommandLine` 成立 ⇒ <c>EnterTextEditMode</c> ⇒
+        /// <c>SwitchToChinese</c> ⇒ 标志清零 ⇒ 第 2 个字母起放行给输入法。
+        /// **与 v59 豆包事故同一个失效模式**，只是这次的伪装是一枚货真价实的 `Edit`。
+        ///
+        /// ★ 因此本判据的语义是：**"这是命令输入端，不是文字内容编辑器"**。
+        ///   调用方据此把它归到「命令栏家族」那一侧（保持英文接管），
+        ///   而不是「外部文本编辑控件」那一侧（让路给输入法）。
+        /// ★ 文字类命令（TEXT / MTEXT / DTEXT…）不受影响：它们的焦点虽然也可能落在
+        ///   动态输入框里，但命令白名单在 <c>OnCommandWillStart</c> 就已经切中文了，
+        ///   调用方也仍会用白名单再挡一道（见 <c>OnFocusObjectChanged</c> 的 v63 分支）。
+        /// </summary>
+        public static bool IsDynamicInputWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            try
+            {
+                var cur = hwnd;
+                int guard = 0;
+                while (cur != IntPtr.Zero && guard++ < 12)
+                {
+                    if (IsDynamicInputMarker(GetClassNameSafe(cur), GetWindowTextSafe(cur)))
+                        return true;
+
+                    // 与 ChainReaches 同一套走法：先父、走不通再属主。
+                    var p = NativeMethods.GetParent(cur);
+                    cur = p != IntPtr.Zero ? p : NativeMethods.GetWindow(cur, NativeMethods.GW_OWNER);
+                }
+            }
+            catch (Exception) { }
+            return false;
         }
 
         /// <summary>

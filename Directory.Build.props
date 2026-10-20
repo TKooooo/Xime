@@ -39,8 +39,103 @@
   <PropertyGroup>
     <Acad35RefDir Condition="'$(Acad35RefDir)' == ''">$(SdkRoot)\2010-R18.0\inc-x64</Acad35RefDir>
     <Acad48RefDir Condition="'$(Acad48RefDir)' == ''">$(SdkRoot)\2014-R19.1\inc</Acad48RefDir>
+  </PropertyGroup>
+
+  <!--
+    ============================================================
+     ⑤ 可选兜底：引用**本机已安装的 AutoCAD** 自带的托管程序集
+
+     ★ 默认**关闭**，必须显式打开：`-p:UseInstalledCadAssemblies=true`
+       或在 local.props 里写 <UseInstalledCadAssemblies>true</UseInstalledCadAssemblies>。
+
+       为什么不默认开：交付用的构建应当钉死 SDK 版本。一旦"没 SDK 就悄悄用本机
+       随便哪个 AutoCAD"，同一份源码在不同机器上会编出不同字节的 DLL，
+       "已验证"就不成立了 —— 这正是本项目一直在防的那类问题。
+
+       但它在两种场景下很有用：
+         · 刚 clone 下来、还没下 ObjectARX SDK，想先确认"代码编得过"；
+         · 只想改插件层逻辑、手边没有对应版本的 SDK。
+
+       实现方式：从注册表读各版本产品键的 AcadLocation（AutoCAD 自带的
+       那批托管程序集与 ObjectARX SDK 的 inc 目录是同一批文件）。
+    ============================================================
+  -->
+  <PropertyGroup Condition="'$(UseInstalledCadAssemblies)' == 'true'">
+    <!-- 优先较新的版本（安全网更全）；找不到再退到较老的 -->
+    <_AcadInstalled Condition="'$(_AcadInstalled)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Autodesk\AutoCAD\R25.0\ACAD-8101:804@AcadLocation)</_AcadInstalled>
+    <_AcadInstalled Condition="'$(_AcadInstalled)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Autodesk\AutoCAD\R24.3\ACAD-8101:804@AcadLocation)</_AcadInstalled>
+    <_AcadInstalled Condition="'$(_AcadInstalled)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Autodesk\AutoCAD\R24.1\ACAD-5101:804@AcadLocation)</_AcadInstalled>
+    <_AcadInstalled Condition="'$(_AcadInstalled)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Autodesk\AutoCAD\R19.1\ACAD-D001:804@AcadLocation)</_AcadInstalled>
+    <Acad48RefDir Condition="!Exists('$(Acad48RefDir)') and '$(_AcadInstalled)' != ''">$(_AcadInstalled)</Acad48RefDir>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- net8.0-windows 复用 net48 的引用程序集（AutoCAD 2025+ 的托管 API 与旧版兼容） -->
     <Acad8RefDir  Condition="'$(Acad8RefDir)'  == ''">$(Acad48RefDir)</Acad8RefDir>
   </PropertyGroup>
+
+  <!--
+    ============================================================
+     中望 / 浩辰 CAD 托管程序集位置解析（v1.1.0 新增）
+
+     ★ 与 ObjectARX SDK 的关键差异：这两家的宿主 API 程序集**随软件一起安装**，
+       不需要额外下载或版权声明 —— 直接引用安装目录里的文件即可：
+
+         中望 CAD：<安装目录>\ZwManaged.dll      （ApplicationServices / Runtime / EditorInput / Windows）
+                   <安装目录>\ZwDatabaseMgd.dll  （DatabaseServices）
+         浩辰 CAD：<安装目录>\GcCoreMgd.dll      （ApplicationServices / Runtime / EditorInput / Windows）
+                   <安装目录>\GcDbMgd.dll        （DatabaseServices）
+                   <安装目录>\GcMgd.dll          （Windows / 内建命令）
+
+     解析优先级（先命中者胜，与 ObjectARX 的 SdkRoot 保持同一套设计）：
+       ① 命令行     -p:ZwcadRefDir=... / -p:GstarCadRefDir=...
+       ② 本地文件   local.props（不进版本库；模板见 local.props.example）
+       ③ 环境变量   ZWCAD_SDK_ROOT / GSTARCAD_SDK_ROOT
+       ④ 默认       按注册表里"当前版本分支"的 Location / LOCATION 自动定位
+                    （两家安装时都会写这个值，指向自己的安装目录，
+                      与当前进程 exe 目录一致，因此不会认错版本）
+
+     ★ 版本分支名两家都随大版本变化（中望 2026 / 浩辰 R26），
+       所以这里**逐个候选列出来**探测 —— 列出的是已知的近几年命名，
+       新版本出来时在下面补一行即可；也可以直接用 ①②③ 指定，绕过自动探测。
+    ============================================================
+  -->
+  <PropertyGroup>
+    <!-- ③ 环境变量 -->
+    <ZwcadRefDir Condition="'$(ZwcadRefDir)' == '' and '$(ZWCAD_SDK_ROOT)' != ''">$(ZWCAD_SDK_ROOT)</ZwcadRefDir>
+    <GstarCadRefDir Condition="'$(GstarCadRefDir)' == '' and '$(GSTARCAD_SDK_ROOT)' != ''">$(GSTARCAD_SDK_ROOT)</GstarCadRefDir>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- ④ 默认：注册表自动定位（HKLM 优先，再 HKCU，覆盖中英文语言分支名） -->
+    <_ZwcadAuto Condition="'$(_ZwcadAuto)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\ZWSOFT\ZWCAD\2026\zh-CN@Location)</_ZwcadAuto>
+    <_ZwcadAuto Condition="'$(_ZwcadAuto)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\ZWSOFT\ZWCAD\2025\zh-CN@Location)</_ZwcadAuto>
+    <_ZwcadAuto Condition="'$(_ZwcadAuto)' == ''">$(Registry:HKEY_CURRENT_USER\Software\ZWSOFT\ZWCAD\2026\zh-CN@Location)</_ZwcadAuto>
+    <_ZwcadAuto Condition="'$(_ZwcadAuto)' == ''">$(Registry:HKEY_CURRENT_USER\Software\ZWSOFT\ZWCAD\2025\zh-CN@Location)</_ZwcadAuto>
+    <ZwcadRefDir Condition="'$(ZwcadRefDir)' == '' and '$(_ZwcadAuto)' != ''">$(_ZwcadAuto)</ZwcadRefDir>
+
+    <_GstarCadAuto Condition="'$(_GstarCadAuto)' == ''">$(Registry:HKEY_CURRENT_USER\Software\Gstarsoft\GstarCAD\R26\zh-CN@LOCATION)</_GstarCadAuto>
+    <_GstarCadAuto Condition="'$(_GstarCadAuto)' == ''">$(Registry:HKEY_CURRENT_USER\Software\Gstarsoft\GstarCAD\R25\zh-CN@LOCATION)</_GstarCadAuto>
+    <_GstarCadAuto Condition="'$(_GstarCadAuto)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Gstarsoft\GstarCAD\R26\zh-cn@LOCATION)</_GstarCadAuto>
+    <_GstarCadAuto Condition="'$(_GstarCadAuto)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Gstarsoft\GstarCAD\R25\zh-cn@LOCATION)</_GstarCadAuto>
+    <GstarCadRefDir Condition="'$(GstarCadRefDir)' == '' and '$(_GstarCadAuto)' != ''">$(_GstarCadAuto)</GstarCadRefDir>
+  </PropertyGroup>
+
+  <!--
+    ★ 落空时报**人话**错误。开关挂在 XimeNeedsZwcadSdk / XimeNeedsGstarCadSdk 上：
+      只有真正引用它们的工程才校验，其它工程不该被牵连。
+  -->
+  <Target Name="XimeValidateHostSdks"
+          BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(XimeNeedsZwcadSdk)' == 'true' or '$(XimeNeedsGstarCadSdk)' == 'true'">
+
+    <Error Condition="'$(XimeNeedsZwcadSdk)' == 'true' and (!Exists('$(ZwcadRefDir)') or !Exists('$(ZwcadRefDir)\ZwManaged.dll'))"
+           Text="找不到中望 CAD 的托管程序集目录：$(ZwcadRefDir)&#10;需要里面同时有 ZwManaged.dll 与 ZwDatabaseMgd.dll（即中望 CAD 的安装目录）。&#10;请任选一种方式指定：&#10;  ① dotnet build -p:ZwcadRefDir=&quot;D:\Program Files\ZWSOFT\ZWCAD 2026&quot;&#10;  ② 在仓库根 local.props 里写 &lt;ZwcadRefDir&gt;...&lt;/ZwcadRefDir&gt;&#10;  ③ 设置环境变量 ZWCAD_SDK_ROOT" />
+
+    <Error Condition="'$(XimeNeedsGstarCadSdk)' == 'true' and (!Exists('$(GstarCadRefDir)') or !Exists('$(GstarCadRefDir)\GcCoreMgd.dll'))"
+           Text="找不到浩辰 CAD 的托管程序集目录：$(GstarCadRefDir)&#10;需要里面有 GcCoreMgd.dll / GcDbMgd.dll / GcMgd.dll（即浩辰 CAD 的安装目录）。&#10;请任选一种方式指定：&#10;  ① dotnet build -p:GstarCadRefDir=&quot;D:\Program Files\浩辰软件\浩辰CAD2026&quot;&#10;  ② 在仓库根 local.props 里写 &lt;GstarCadRefDir&gt;...&lt;/GstarCadRefDir&gt;&#10;  ③ 设置环境变量 GSTARCAD_SDK_ROOT" />
+
+  </Target>
 
   <!--
     ★ 落空时报一条**人话**错误，而不是丢出几百行 CS0246。
@@ -51,8 +146,13 @@
           BeforeTargets="ResolveAssemblyReferences"
           Condition="'$(XimeNeedsAcadSdk)' == 'true'">
 
-    <Error Condition="!Exists('$(SdkRoot)')"
-           Text="找不到 ObjectARX SDK 目录：$(SdkRoot)&#10;请任选一种方式指定（完整说明见仓库根 local.props.example）：&#10;  ① dotnet build -p:SdkRoot=&quot;D:\ObjectARX-SDK&quot;&#10;  ② 在仓库根放一个 local.props（不进版本库）&#10;  ③ 设置环境变量 ACAD_SDK_ROOT&#10;  ④ 把 ObjectARX-SDK 目录放到本仓库的同级位置" />
+    <!--
+      ★ SdkRoot 目录本身不存在时报错。
+        例外：开了 UseInstalledCadAssemblies（⑤ 兜底）时不报 ——
+        此时引用目录是从本机已装 AutoCAD 解析出来的，SdkRoot 本来就不需要。
+    -->
+    <Error Condition="!Exists('$(SdkRoot)') and '$(UseInstalledCadAssemblies)' != 'true'"
+           Text="找不到 ObjectARX SDK 目录：$(SdkRoot)&#10;请任选一种方式指定（完整说明见仓库根 local.props.example）：&#10;  ① dotnet build -p:SdkRoot=&quot;D:\ObjectARX-SDK&quot;&#10;  ② 在仓库根放一个 local.props（不进版本库）&#10;  ③ 设置环境变量 ACAD_SDK_ROOT&#10;  ④ 把 ObjectARX-SDK 目录放到本仓库的同级位置&#10;（另有临时办法：-p:UseInstalledCadAssemblies=true 直接引用本机已安装的 AutoCAD 程序集）" />
 
     <Error Condition="'$(TargetFramework)' == 'net35' and !Exists('$(Acad35RefDir)')"
            Text="net35 的引用目录不存在：$(Acad35RefDir)&#10;需要 ObjectARX SDK 的 2010-R18.0\inc-x64（AutoCAD 2010-2012）。" />

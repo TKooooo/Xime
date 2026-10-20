@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
-"""v1.0.2「无感修订版」负向对照工具（一次性跑完：注入 → 重建 → 跑回归 → 还原 → 报红几条）。
+﻿# -*- coding: utf-8 -*-
+"""v1.0.3「无感修订版」负向对照工具（一次性跑完：注入 → 重建 → 跑回归 → 还原 → 报红几条）。
 
 用法：
-  python _negctl_v102.py all      逐个跑完全部对照并打印结果表
-  python _negctl_v102.py restore  还原全部被注入的源文件
+  python _negctl_v103.py all      逐个跑完全部对照并打印结果表
+  python _negctl_v103.py restore  还原全部被注入的源文件
 
 对照项与**预期**（预期来自"每条新断言都恰好打中它要守的那条契约"）：
   version      把 FallbackVersion 改回 "1.0.0"                        → 红 1
@@ -70,7 +70,7 @@ ROOT = r'C:/Users/XJH/WorkBuddy/2026-10-01-11-40-37/Xime'
 TARGETS = {
     'version': {
         'src': ROOT + r'/src/Xime.Core/UI/SettingsForm.cs',
-        'orig': 'internal const string FallbackVersion = "1.0.2";',
+        'orig': 'internal const string FallbackVersion = "1.0.5";',
         'inj': 'internal const string FallbackVersion = "1.0.0";  // ★负向对照',
     },
     'uninstall': {

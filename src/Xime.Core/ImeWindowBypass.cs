@@ -43,8 +43,11 @@ namespace Xime.Core
     ///   ③ 只在**非文字类命令**（不在中文白名单里）—— 打标注文字时必须让输入法工作。
     ///   ④ 不在**文字编辑态** —— 双击文字改字时必须能打中文。
     ///   ⑤ **不碰本插件自己的命令** —— 诊断命令不许改变被诊断的状态。
+    ///   ⑥ ★ v62：焦点**不在**"非命令栏的文本编辑控件"上 —— 图层特性管理器里改图层名、
+    ///      各种对话框的输入框，都是用户要打中文的地方（实测那个框是 WinForms 编辑控件，
+    ///      类名 `WindowsForms10.EDIT.app…`）。见 <see cref="ShouldEngage"/> 第 ⑧ 条。
     ///
-    ///   六条全过才动手；任一条不成立就**确保已还原**（见 <see cref="Disengage"/>）。
+    ///   全部判据通过才动手；任一条不成立就**确保已还原**（见 <see cref="Disengage"/>）。
     ///
     /// ================== 安全（绝不把用户卡在"打不了中文"）==================
     ///
@@ -98,7 +101,7 @@ namespace Xime.Core
         /// <summary>
         /// 是否该让 CAD 窗口无视输入法（纯判据，可自测）。
         ///
-        /// 六条**全部**为真才返回 true；任何一条不成立都返回 false
+        /// 八条**全部**为真才返回 true；任何一条不成立都返回 false
         /// ⇒ 调用方据此**确保还原**（true→解除关联，false→还原）。
         /// </summary>
         /// <param name="switchOn">配置开关 <c>BypassImeDuringCommand</c>。</param>
@@ -111,6 +114,11 @@ namespace Xime.Core
         /// 当前命令是否属于本插件（见 <see cref="IsOwnPluginCommand"/>）——
         /// ★ 诊断命令不允许改变被诊断的状态。
         /// </param>
+        /// <param name="focusOnForeignEditBox">
+        /// ★ v62：真实焦点此刻是否落在**非命令栏的文本编辑控件**上
+        /// （图层管理器的名称框、各类对话框的输入框…）。
+        /// 见 <c>XimeEngine.FocusIsForeignEditBox</c>。
+        /// </param>
         public static bool ShouldEngage(
             bool switchOn,
             XimeWorkMode mode,
@@ -118,7 +126,8 @@ namespace Xime.Core
             bool hasActiveCommand,
             bool commandNeedsChinese,
             bool inTextEditMode,
-            bool commandIsOwnPlugin)
+            bool commandIsOwnPlugin,
+            bool focusOnForeignEditBox)
         {
             // ① 配置开关（用户可一键关掉整个机制）
             if (!switchOn) return false;
@@ -134,6 +143,21 @@ namespace Xime.Core
             if (!hasActiveCommand) return false;
             // ⑦ 文字类命令（TEXT/MTEXT/天正文字…）：命令期间要打中文
             if (commandNeedsChinese) return false;
+            // ⑧ ★★★ v62：焦点在**外部文本编辑控件**上 ⇒ 必须让输入法工作。
+            //
+            //   为什么独立于第 ⑤ 条：第 ⑤ 条靠 `_inTextEditMode` 这个**状态位**，
+            //   而它是焦点事件驱动的 —— 有两种情形它到不了 true：
+            //     · 焦点事件没送达（跨进程 WinEvent 偶发丢失）；
+            //     · 焦点"先落在编辑框、随后命令才开始"（命令事件先于焦点事件）。
+            //   第 ⑧ 条直接就地读真实焦点，**不依赖任何状态位**，
+            //   与 `XimeEngine.FocusIsForeignEditBox` 同源
+            //   （那里用同一条判据决定"键盘钩子要不要让路"）。
+            //
+            //   典型场景：AutoCAD 图层特性管理器里新建图层、改图层名 ——
+            //   那个框是 WinForms 编辑控件（实测类名
+            //   `WindowsForms10.EDIT.app.0.1a4f6bb_r57_ad1`），
+            //   用户要在里面打中文；此时解除窗口与输入法的关联 = 直接让他打不出字。
+            if (focusOnForeignEditBox) return false;
             return true;
         }
 

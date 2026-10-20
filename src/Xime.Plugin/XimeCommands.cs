@@ -1,11 +1,22 @@
 using System;
 using System.Text;
+
+// ★★ 宿主 API 命名空间 —— 与 XimeApplication.cs 同一套编译符号，说明见那边。
+//   一份源码编三种宿主：Autodesk.AutoCAD.* / ZwSoft.ZwCAD.* / Gssoft.Gscad.*
+#if HOST_ZWCAD
+using ZwSoft.ZwCAD.ApplicationServices;
+using ZwSoft.ZwCAD.Runtime;
+#elif HOST_GSTARCAD
+using Gssoft.Gscad.ApplicationServices;
+using Gssoft.Gscad.Runtime;
+#else
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
+#endif
 using Xime.Core;
 using Xime.Core.Native;
 
-namespace Xime.Acad
+namespace Xime.Plugin
 {
     /// <summary>
     /// X输入法 命令集合。
@@ -80,7 +91,7 @@ namespace Xime.Acad
                     XimeApplication.WriteStartupLog(
                         "[卸载] 复位后配置: " + XimeApplication.Config.DescribeState());
                     XimeApplication.WriteStartupLog(
-                        "[卸载] 插件已停止。下一步：完全退出 AutoCAD 后重新 NETLOAD，"
+                        "[卸载] 插件已停止。下一步：完全退出 " + Compat.HostShortName + " 后重新 NETLOAD，"
                         + "那次加载应当报「无视输入法模式」");
 
                     XimeApplication.WriteStartupLog(
@@ -91,10 +102,10 @@ namespace Xime.Acad
 
                     XimeApplication.SafeWriteMessage(
                         "\n[X输入法] 已卸载：插件已停止，本版本的自动加载注册已清除，配置已复位为全新安装。\r\n"
-                        + "          ★ 自动加载注册是**按 AutoCAD 版本各写一份**的，卸载**只清当前这一个版本**\r\n"
-                        + "            （即现在正开着的这个 AutoCAD）；本机其它版本（如 2014 / 2022）的\r\n"
+                        + "          ★ 自动加载注册是**按 " + Compat.HostShortName + " 版本各写一份**的，卸载**只清当前这一个版本**\r\n"
+                        + "            （即现在正开着的这个 " + Compat.HostShortName + "）；本机其它版本（如 2014 / 2022）的\r\n"
                         + "            注册项**原样保留**，不会被牵连。\r\n"
-                        + "          想让某个版本重新自动加载：在那个版本的 AutoCAD 里执行\r\n"
+                        + "          想让某个版本重新自动加载：在那个版本的 " + Compat.HostShortName + " 里执行\r\n"
                         + "            XIMEAUTO，或 NETLOAD 一次本 DLL。\r\n"
                         + "          重新 NETLOAD 加载本 DLL 会当作全新安装：默认启用 + 默认无视输入法模式。");
 
@@ -130,7 +141,7 @@ namespace Xime.Acad
             var e = XimeApplication.Engine;
             if (e == null) { XimeApplication.SafeWriteMessage("\n[X输入法] 引擎未启动。"); return; }
 
-            var frame = Xime.Core.AcadTextFrame.Resolve();
+            var frame = Xime.Core.HostTextFrame.Resolve();
             var cur = string.IsNullOrEmpty(e.CurrentCommand) ? "-" : e.CurrentCommand;
             string needCn = "无";
             if (e.CurrentCommand != null)
@@ -182,7 +193,7 @@ namespace Xime.Acad
                 "\n   └ 命令事件钩子: " + (Hooked ? "已挂接" : "★ 未挂接（异常 → 命令期间无视输入法会整条失效）")
                 + (Hooked
                     ? "   （从加载那一刻起生效；无需先敲一次本命令）"
-                    : "   （请完全退出 AutoCAD 后重新 NETLOAD）"));
+                    : "   （请完全退出 " + Compat.HostShortName + " 后重新 NETLOAD）"));
 
             if (!bypassOn)
             {
@@ -411,7 +422,7 @@ namespace Xime.Acad
                              + "（枚举 " + visited + " 个 = 主窗口 + 全部子孙）。";
                         head += (n == 0)
                             ? "\n  ★ 0 个 = 这些窗口本来就没有输入法上下文 ⇒ 这套机制在你机器上无从下手，"
-                              + "候选窗只能靠 XIMEMODE 1（切换输入法模式）解决。"
+                              + "候选窗改由第二层兜底处理：焦点不在命令行输入框时，按键一律放行给系统。"
                             : howToTest;
                     }
 
@@ -496,7 +507,7 @@ namespace Xime.Acad
             sb.AppendLine("当前用户输入法: " + GetActiveImeName());
 
             var fg = NativeMethods.GetForegroundWindow();
-            var acad = XimeApplication.GetAcadMainWindow();
+            var acad = XimeApplication.GetHostMainWindow();
             var engine = XimeApplication.Engine;
             var probe = engine != null ? engine.Ime : new ImeController();
 
@@ -520,7 +531,7 @@ namespace Xime.Acad
                 + (XimeEngine.IsOwnWindow(fg) ? "  ← 本插件自己的窗口" : ""));
             sb.AppendLine("切换动作靶点: " + (target != IntPtr.Zero
                 ? "0x" + target.ToInt64().ToString("X") + " 类名=" + FocusMonitor.GetWindowClass(target)
-                : "(无 —— 当前没有属于 AutoCAD 的窗口)")
+                : "(无 —— 当前没有属于 " + Compat.HostShortName + " 的窗口)")
                 + (target != IntPtr.Zero
                     ? (targetTrusted ? "  [可信：IME 上下文在此]" : "  ★ 不可信：不是 IME 承接窗口")
                     : ""));
@@ -537,7 +548,7 @@ namespace Xime.Acad
             // ★ v6：命令期间「让 CAD 窗口无视输入法」的状态 —— 这是
             //   "天正二级命令能用、又不弹候选窗"的关键闸门，出问题第一个看这里。
             //   「已解除关联窗口 = 0」意味着这些窗口本来就没有输入法上下文
-            //   ⇒ 这套机制在你这台机器上无从下手（候选窗只能靠 XIMEMODE 1 解决）。
+            //   ⇒ 这套机制在你这台机器上无从下手（改由「焦点不在命令行输入框时放行」这一层兜底）。
             sb.AppendLine("命令期间无视输入法: "
                 + (XimeApplication.Config.BypassImeDuringCommand ? "开" : "关")
                 + (engine != null
@@ -685,7 +696,7 @@ namespace Xime.Acad
             XimeApplication.Engine.Refresh();
             XimeApplication.SafeWriteMessage(
                 "\n[X输入法] 已关闭（已恢复本地输入法状态）。"
-                + "该状态会被保存，重启 AutoCAD 后仍是关闭；"
+                + "该状态会被保存，重启 " + Compat.HostShortName + " 后仍是关闭；"
                 + "需要恢复请执行 XIMEON 或在界面里勾选「启用 X输入法」。");
         }
 
@@ -702,7 +713,7 @@ namespace Xime.Acad
                 string cadVer = "未知";
                 try { cadVer = Application.Version.ToString(); } catch (System.Exception) { }
 
-                sb.AppendLine("AutoCAD 版本: " + cadVer);
+                sb.AppendLine(Compat.HostShortName + " 版本: " + cadVer);
                 sb.AppendLine("操作系统: " + System.Environment.OSVersion.Version);
                 sb.AppendLine("CLR: " + System.Environment.Version);
                 sb.AppendLine("进程架构: " + (Compat.ProcessArch));
@@ -721,13 +732,13 @@ namespace Xime.Acad
                 }
 
                 // 命令栏句柄
-                var mainHwnd = XimeApplication.GetAcadMainWindow();
+                var mainHwnd = XimeApplication.GetHostMainWindow();
                 sb.AppendLine("CAD 主窗口句柄: 0x" + mainHwnd.ToInt64().ToString("X"));
                 sb.AppendLine("前台窗口句柄: 0x" + NativeMethods.GetForegroundWindow().ToInt64().ToString("X"));
 
-                var frame = Xime.Core.AcadTextFrame.Resolve();
+                var frame = Xime.Core.HostTextFrame.Resolve();
                 sb.AppendLine("命令栏控件句柄: " + (frame != IntPtr.Zero
-                    ? "0x" + frame.ToInt64().ToString("X") + " (" + Xime.Core.AcadTextFrame.GetClassNameSafe(frame) + ")"
+                    ? "0x" + frame.ToInt64().ToString("X") + " (" + Xime.Core.HostTextFrame.GetClassNameSafe(frame) + ")"
                     : "定位失败"));
 
                 sb.AppendLine("当前用户输入法: " + GetActiveImeName());
@@ -894,7 +905,7 @@ namespace Xime.Acad
 
                 var fg = NativeMethods.GetForegroundWindow();
                 sb.AppendLine("前台窗口     : 0x" + fg.ToInt64().ToString("X") +
-                    "  类名=" + Xime.Core.AcadTextFrame.GetClassNameSafe(fg) +
+                    "  类名=" + Xime.Core.HostTextFrame.GetClassNameSafe(fg) +
                     "  标题=" + Xime.Core.FocusMonitor.GetWindowText(fg));
 
                 var focus = Xime.Core.CharInjector.GetRealFocusWindow();
@@ -915,7 +926,7 @@ namespace Xime.Acad
 
                 sb.AppendLine();
                 sb.AppendLine("识别为编辑框 : " + (Xime.Core.FocusMonitor.IsEditBoxWindow(focus) ? "是 ✓" : "否 ✗"));
-                sb.AppendLine("属于命令栏   : " + (Xime.Core.AcadTextFrame.IsCommandLineWindow(focus) ? "是（会排除）" : "否"));
+                sb.AppendLine("属于命令栏   : " + (Xime.Core.HostTextFrame.IsCommandLineWindow(focus) ? "是（会排除）" : "否"));
                 if (e != null)
                 {
                     sb.AppendLine("引擎文字编辑态: " + (e.InTextEditMode ? "是（允许中文）" : "否（英文接管）"));
@@ -982,7 +993,7 @@ namespace Xime.Acad
                 if (written.Count > 0)
                 {
                     sb.AppendLine("已写入   : " + string.Join(" | ", written.ToArray()));
-                    sb.AppendLine("→ 下次启动【这个版本】的 AutoCAD 时会自动加载本插件。");
+                    sb.AppendLine("→ 下次启动【这个版本】的 " + Compat.HostShortName + " 时会自动加载本插件。");
                     sb.AppendLine("  ★ 注意：只对当前版本生效。其它版本（如 2014 / 2022 的另一边）");
                     sb.AppendLine("    需要在那个版本里各跑一次 XIMEAUTO（或 NETLOAD 一次）。");
                 }
@@ -1048,7 +1059,7 @@ namespace Xime.Acad
                 sb.AppendLine();
                 sb.AppendLine("===== X输入法 命令栏定位自检 =====");
 
-                var mainHwnd = XimeApplication.GetAcadMainWindow();
+                var mainHwnd = XimeApplication.GetHostMainWindow();
                 sb.AppendLine("CAD 主窗口   : 0x" + mainHwnd.ToInt64().ToString("X"));
                 sb.AppendLine("前台窗口     : 0x" + NativeMethods.GetForegroundWindow().ToInt64().ToString("X"));
 
@@ -1056,13 +1067,13 @@ namespace Xime.Acad
                 var focus = Xime.Core.CharInjector.GetRealFocusWindow();
                 sb.AppendLine("真实焦点控件 : 0x" + focus.ToInt64().ToString("X") +
                     (focus != IntPtr.Zero
-                        ? "  类名=" + Xime.Core.AcadTextFrame.GetClassNameSafe(focus) +
-                          (Xime.Core.AcadTextFrame.IsTextWindow(focus) ? "  ⚠文本窗口" : "") +
-                          "  强度=" + Xime.Core.AcadTextFrame.MatchStrength(focus)
+                        ? "  类名=" + Xime.Core.HostTextFrame.GetClassNameSafe(focus) +
+                          (Xime.Core.HostTextFrame.IsTextWindow(focus) ? "  ⚠文本窗口" : "") +
+                          "  强度=" + Xime.Core.HostTextFrame.MatchStrength(focus)
                         : ""));
 
                 // 核心：命令栏输入控件定位
-                var frame = Xime.Core.AcadTextFrame.Resolve();
+                var frame = Xime.Core.HostTextFrame.Resolve();
                 if (frame == IntPtr.Zero)
                 {
                     sb.AppendLine("命令栏控件   : 定位失败 ✗");
@@ -1074,20 +1085,20 @@ namespace Xime.Acad
                 }
                 else
                 {
-                    bool isText = Xime.Core.AcadTextFrame.IsTextWindow(frame);
+                    bool isText = Xime.Core.HostTextFrame.IsTextWindow(frame);
                     sb.AppendLine("命令栏控件   : 0x" + frame.ToInt64().ToString("X") +
                         (isText ? " ✗ 误命中文本窗口" : " ✓"));
-                    sb.AppendLine("  窗口类名   : " + Xime.Core.AcadTextFrame.GetClassNameSafe(frame));
-                    sb.AppendLine("  窗口标题   : " + Xime.Core.AcadTextFrame.GetWindowTextSafe(frame));
-                    sb.AppendLine("  匹配强度   : " + Xime.Core.AcadTextFrame.MatchStrength(frame) +
+                    sb.AppendLine("  窗口类名   : " + Xime.Core.HostTextFrame.GetClassNameSafe(frame));
+                    sb.AppendLine("  窗口标题   : " + Xime.Core.HostTextFrame.GetWindowTextSafe(frame));
+                    sb.AppendLine("  匹配强度   : " + Xime.Core.HostTextFrame.MatchStrength(frame) +
                         "（2=Edit/RichEdit 强特征 / 1=Afx 弱特征）");
-                    sb.AppendLine("  是否可见   : " + (Xime.Core.AcadTextFrame.IsVisible(frame) ? "是" : "否"));
-                    sb.AppendLine("  窗口宽度   : " + Xime.Core.AcadTextFrame.WidthOf(frame) + " px");
+                    sb.AppendLine("  是否可见   : " + (Xime.Core.HostTextFrame.IsVisible(frame) ? "是" : "否"));
+                    sb.AppendLine("  窗口宽度   : " + Xime.Core.HostTextFrame.WidthOf(frame) + " px");
 
                     if (isText)
                     {
                         sb.AppendLine();
-                        sb.AppendLine("【警告】定位到了「AutoCAD 文本窗口」(F2 控制台)，这是错误的窗口！");
+                        sb.AppendLine("【警告】定位到了「" + Compat.HostShortName + " 文本窗口」(F2 控制台)，这是错误的窗口！");
                         sb.AppendLine("        投递到它会导致命令栏无任何反应。请把此输出反馈给开发者。");
                     }
                     else
@@ -1134,9 +1145,9 @@ namespace Xime.Acad
                 sb.AppendLine();
                 sb.AppendLine("===== X输入法 投递实测（单通道 UNICODE）=====");
 
-                var frame = Xime.Core.AcadTextFrame.Resolve();
+                var frame = Xime.Core.HostTextFrame.Resolve();
                 sb.AppendLine("目标控件 : " + (frame != IntPtr.Zero
-                    ? "0x" + frame.ToInt64().ToString("X") + " (" + Xime.Core.AcadTextFrame.GetClassNameSafe(frame) + ")"
+                    ? "0x" + frame.ToInt64().ToString("X") + " (" + Xime.Core.HostTextFrame.GetClassNameSafe(frame) + ")"
                     : "定位失败（不影响注入）"));
 
                 // 正式插件使用的唯一通道：SendInput(KEYEVENTF_UNICODE)
@@ -1190,11 +1201,11 @@ namespace Xime.Acad
                 sb.AppendLine();
                 sb.AppendLine("===== X输入法 窗口树（深度 " + depth + "）=====");
 
-                var mainHwnd = XimeApplication.GetAcadMainWindow();
+                var mainHwnd = XimeApplication.GetHostMainWindow();
                 sb.AppendLine("主窗口 = 0x" + mainHwnd.ToInt64().ToString("X"));
                 sb.AppendLine("（格式：句柄 [类名] 强度=… 可见 宽=… \"标题\"）");
                 sb.AppendLine();
-                sb.Append(Xime.Core.AcadTextFrame.DumpTree(mainHwnd, depth));
+                sb.Append(Xime.Core.HostTextFrame.DumpTree(mainHwnd, depth));
                 sb.AppendLine("=========================================");
 
                 var full = sb.ToString();
@@ -1246,7 +1257,7 @@ namespace Xime.Acad
 
                 XimeApplication.SafeWriteMessage(
                     "\n[X输入法] 吞键诊断开始：接下来 5 秒处于「只吞键、不注入」状态。" +
-                    "\n  请保持 AutoCAD 在前台，敲几个字母（例如 lin）。");
+                    "\n  请保持 " + Compat.HostShortName + " 在前台，敲几个字母（例如 lin）。");
 
                 int before = e.SwallowCount;
                 XimeEngine.SwallowOnly = true;
@@ -1370,7 +1381,7 @@ namespace Xime.Acad
                 AttachToDocument(e.Document);
                 if (XimeApplication.Engine != null)
                 {
-                    XimeApplication.Engine.UpdateAcadWindow(XimeApplication.GetAcadMainWindow());
+                    XimeApplication.Engine.UpdateAcadWindow(XimeApplication.GetHostMainWindow());
                     XimeApplication.Engine.Ime.ResetCache();
                 }
             }

@@ -1,11 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net35;net48;net8.0-windows</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <AssemblyName>Xime</AssemblyName>
-    <RootNamespace>Xime.Acad</RootNamespace>
-    <Version>1.0.2</Version>
+    <RootNamespace>Xime.Plugin</RootNamespace>
+    <Version>1.0.5</Version>
     <!--
       ★ AssemblyVersion **刻意恒为 1.0.0.0**，不要跟着版本号改：
         它是 CLR 的"程序集身份"，决定程序集能否被复用。插件跑在 acad.exe 内、
@@ -14,7 +14,7 @@
         对外显示版本 = <FileVersion>（XimeApplication.Version 读的就是它）。
     -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
+    <FileVersion>1.0.5.0</FileVersion>
     <Company>影子</Company>
     <Author>影子</Author>
     <Product>X输入法</Product>
@@ -43,9 +43,26 @@
         只有这里需要，Xime.Core / Xime.CliTest 都不需要。
     -->
     <XimeNeedsAcadSdk>true</XimeNeedsAcadSdk>
+    <!--
+      ★★ 宿主编译符号（本次扩展）：插件层是**共享源码**，靠这个符号切换宿主 API 命名空间。
+         HOST_AUTOCAD / HOST_ZWCAD / HOST_GSTARCAD 三选一，各工程各自定义其一。
+         用 $(DefineConstants) 前缀是必须的 —— 直接赋值会把 SDK 默认的
+         TRACE / DEBUG 等符号一起抹掉。
+    -->
+    <DefineConstants>$(DefineConstants);HOST_AUTOCAD</DefineConstants>
     <!-- DLL 自身携带 X输入法 图标（资源管理器 / 属性对话框可见） -->
     <ApplicationIcon>$(MSBuildThisFileDirectory)..\Xime.Core\Resources\XimeLogo.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!--
+    ★★ 共享插件层源码（本次扩展）：XimeApplication / XimeCommands / Compat 三个文件
+       由 AutoCAD / 中望 / 浩辰 三个工程**同时编译**，靠 DefineConstants 区分宿主。
+       改一处 = 三家同时生效，不存在"三份代码各自漂移"的问题。
+       链接进来时保持目录结构（Link 前缀 Plugin\），在 IDE 里一眼能看出哪些是共享的。
+  -->
+  <ItemGroup>
+    <Compile Include="..\Xime.Plugin\**\*.cs" LinkBase="Plugin" />
+  </ItemGroup>
 
   <!-- AutoCAD 托管程序集引用目录
        ★ SdkRoot 的**来源已经不在这里**，见仓库根的 Directory.Build.props：

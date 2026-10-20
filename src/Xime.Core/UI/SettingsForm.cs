@@ -68,7 +68,7 @@ namespace Xime.Core.UI
         ///   无视模式下表现为**双击文字打不出中文**。
         ///
         ///   正确语义：卸载 = 停止 + 清注册 + 配置复位为全新安装；
-        ///   之后**重新 NETLOAD** 才按全新安装启动（启用 + 切换输入法模式）。
+        ///   之后**重新 NETLOAD** 才按全新安装启动（启用 + 无视输入法模式）。
         /// </summary>
         public bool Uninstalled { get; private set; }
 
@@ -94,7 +94,7 @@ namespace Xime.Core.UI
         /// ★ 只此一处定义：默认参数值、构造里的兜底都必须用它 ——
         ///   两处各写一个字面量，就是下一位改版本号时漏一处的开始。
         /// </summary>
-        internal const string FallbackVersion = "1.0.2";
+        internal const string FallbackVersion = "1.0.5";
 
         /// <param name="config">配置对象（为 null 时使用默认配置）。</param>
         /// <param name="engine">引擎（仅预览时可传 null）。</param>
@@ -948,7 +948,7 @@ namespace Xime.Core.UI
             sb.AppendLine("      · 生效范围（四条全过才动手）：无视输入法模式 + 引擎已接管 + 命令执行期间 + **非**文字类命令；");
             sb.AppendLine("        正在输入中文内容的场合（TEXT/MTEXT/天正文字等文字类命令、以及焦点在文字编辑框时）**刻意不生效**，保证打标注时输入法照常工作。");
             sb.AppendLine("      · 现场想立刻验证：执行 XIMEBYPASS 1（马上解除）→ 回 CAD 敲天正二级命令 → 执行 XIMEBYPASS 0（务必还原）。");
-            sb.AppendLine("      · 若探针显示「已解除关联窗口 = 0」，说明你这台机器上这些窗口本来就没有输入法上下文，本机制无从下手 —— 那就只能用下面的「切换输入法模式」。");
+            sb.AppendLine("      · 若探针显示「已解除关联窗口 = 0」，说明你这台机器上这些窗口本来就没有输入法上下文 —— 此时还有第二层兜底：焦点**不在命令行输入框**时，按键一律放行给系统、由你自己的输入法负责。请把这一行连同日志发给作者。");
             sb.AppendLine("   ⑧ 「切换输入法模式」（在「模式」区二选一，**退路**）：不接管按键，而是真的去切输入法的中英文状态（等价于你手动按一下 Shift，键盘布局不变）。");
             sb.AppendLine("      · 进入 CAD：把输入法保持在英文；");
             sb.AppendLine("      · 执行上面白名单里的命令：切成中文；命令结束或退出：切回英文并保持；");
@@ -1160,7 +1160,7 @@ namespace Xime.Core.UI
                     "X输入法 已卸载。\r\n" +
                     "自动加载注册表项已清除，重启 AutoCAD 后不再自动加载。\r\n" +
                     "配置已重置为默认 —— 之后重新 NETLOAD 加载，会当作全新安装：\r\n" +
-                    "默认启用、默认使用「切换输入法模式」。",
+                    "默认启用、默认使用「无视输入法模式」。",
                     "卸载完成",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);

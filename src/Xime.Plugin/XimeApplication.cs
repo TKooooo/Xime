@@ -1,18 +1,41 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
+
+// ★★ 宿主 API 命名空间 —— 一份插件源码，编出三种宿主的 DLL（本次扩展起）。
+//
+//   编译符号（由各工程定义）：
+//     HOST_AUTOCAD   → Autodesk.AutoCAD.*   AutoCAD 2010~2026
+//     HOST_ZWCAD     → ZwSoft.ZwCAD.*       中望 CAD（ZwManaged.dll / ZwDatabaseMgd.dll）
+//     HOST_GSTARCAD  → Gssoft.Gscad.*       浩辰 CAD（GcCoreMgd.dll / GcDbMgd.dll / GcMgd.dll）
+//
+//   三家的托管 API 形状**高度同构**（`Application.DocumentManager` /
+//   `CommandMethod` / `IExtensionApplication` / `CommandWillStart` …），
+//   所以这里只需要换 `using`，方法体一行都不用改 —— 这也正是把插件层做成
+//   "共享源码 + 条件编译"而不是"复制三份"的依据。
+#if HOST_ZWCAD
+using ZwSoft.ZwCAD.ApplicationServices;
+using ZwSoft.ZwCAD.Runtime;
+#elif HOST_GSTARCAD
+using Gssoft.Gscad.ApplicationServices;
+using Gssoft.Gscad.Runtime;
+#else
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
+#endif
 using Xime.Core;
 using Xime.Core.Native;
 
-// AutoCAD 插件入口程序集。一个 DLL 同时承载：
+// 宿主插件入口程序集。一个 DLL 同时承载：
 //   - IExtensionApplication（自动加载、命令注册）
 //   - 命令 xime / XIME-* 系列
-[assembly: ExtensionApplication(typeof(Xime.Acad.XimeApplication))]
-[assembly: CommandClass(typeof(Xime.Acad.XimeCommands))]
+//
+// ★ 下面两行**不带 #if**：`ExtensionApplication` / `CommandClass` 由上面的
+//   条件 using 解析到当前宿主的同名特性（三家都叫这个名字，是刻意的兼容设计）。
+[assembly: ExtensionApplication(typeof(Xime.Plugin.XimeApplication))]
+[assembly: CommandClass(typeof(Xime.Plugin.XimeCommands))]
 
-namespace Xime.Acad
+namespace Xime.Plugin
 {
     /// <summary>
     /// X输入法 AutoCAD 插件入口。
@@ -34,7 +57,7 @@ namespace Xime.Acad
         {
             try
             {
-                WriteStartupLog("==== 加载 X输入法 v" + Version + " ====");
+                WriteStartupLog("==== 加载 X输入法 v" + Version + " [" + Compat.HostName + "] ====");
 
                 // ★ 先查"是不是已经有别的版本在跑"——这是「换了新版却没变化」
                 //   的头号原因，必须在做任何事之前就告诉用户。
@@ -77,7 +100,17 @@ namespace Xime.Acad
                     try { _config.Save(); } catch (System.Exception) { }
                 }
 
-                var mainHwnd = GetAcadMainWindow();
+#if !HOST_AUTOCAD
+                // ★★ 非 AutoCAD 宿主：换成宿主中立的命令栏定位实现（本次扩展）
+                //   中望 / 浩辰没有 acad.exe 的 `AcadGetTextFrameHandle` 导出，
+                //   主框架也不是 MFC `Afx:` 类，AutoCAD 那套判据在它们身上会全数落空。
+                //   ★ 必须在引擎 Start() **之前**设好：引擎一开始监听按键就会调用它。
+                //   （默认实现就是 AutoCAD，所以原宿主的这一整段根本不参与编译。）
+                HostTextFrame.Current = new GenericTextFrameProvider();
+                WriteStartupLog("  命令栏定位: 通用实现（宿主 " + Compat.HostName + "）");
+#endif
+
+                var mainHwnd = GetHostMainWindow();
                 _engine = new XimeEngine(mainHwnd, _config);
 
                 // ★★★ v45：把引擎的「关键事件」接到**始终记录**的启动日志上。
@@ -291,7 +324,7 @@ namespace Xime.Acad
                        + string.Join("\n          ", folders.ToArray())
                        + "\n          旧版本仍会继续拦截按键 —— 这会让「换了新版却没变化」看起来像插件没生效。"
                        + "\n          处理：① 执行 xime 打开界面点「卸载 X输入法」（清掉全部自动加载项）；"
-                       + "\n                ② 完全退出 AutoCAD；"
+                       + "\n                ② 完全退出 " + Compat.HostShortName + "；"
                        + "\n                ③ 重开后只 NETLOAD 新版本目录里的 Xime.dll。";
             }
             catch (System.Exception)
@@ -450,17 +483,17 @@ namespace Xime.Acad
         {
             // 新文档建立后，刷新主窗口句柄与输入法缓存
             if (_engine == null) return;
-            _engine.UpdateAcadWindow(GetAcadMainWindow());
+            _engine.UpdateAcadWindow(GetHostMainWindow());
             _engine.Ime.ResetCache();
         }
 
         #endregion
 
         /// <summary>
-        /// 获取 AutoCAD 主窗口句柄。
-        /// Application.MainWindow.Handle 在各版本均返回 IntPtr，直接使用即可。
+        /// 获取**宿主**主窗口句柄（AutoCAD / 中望 / 浩辰 通用）。
+        /// Application.MainWindow.Handle 在各宿主、各版本均返回 IntPtr，直接使用即可。
         /// </summary>
-        internal static IntPtr GetAcadMainWindow()
+        internal static IntPtr GetHostMainWindow()
         {
             try
             {
@@ -506,9 +539,9 @@ namespace Xime.Acad
         }
 
         /// <summary>
-        /// 插件版本号（对外显示用，形如 "1.0.2"）。
-        /// 程序集里记录的是 1.0.2.0 四段式，这里去掉尾部多余的 ".0"，
-        /// 避免界面上出现 "v1.0.2.0" 这种冗余写法。
+        /// 插件版本号（对外显示用，形如 "1.0.5"）。
+        /// 程序集里记录的是 1.0.5.0 四段式，这里去掉尾部多余的 ".0"，
+        /// 避免界面上出现 "v1.0.5.0" 这种冗余写法。
         ///
         /// ★ 来源是 <c>AssemblyFileVersion</c>（csproj 的 &lt;FileVersion&gt;），
         ///   不是 <c>AssemblyVersion</c> —— 后者恒为 1.0.0.0（刻意，见 csproj 注释）。
@@ -532,16 +565,16 @@ namespace Xime.Acad
                 catch (System.Exception)
                 {
                     // 取不到程序集特性时退回一个"至少不是空白"的占位；
-                    // 正常路径永远走上面的 FileVersion（1.0.2.0 → "1.0.2"）。
-                    return "1.0.2";
+                    // 正常路径永远走上面的 FileVersion（1.0.5.0 → "1.0.5"）。
+                    return "1.0.5";
                 }
             }
         }
 
-        /// <summary>把 1.0.2.0 规范成 1.0.2（保留至少三段，去掉尾部多余的 .0）。</summary>
+        /// <summary>把 1.0.5.0 规范成 1.0.5（保留至少三段，去掉尾部多余的 .0）。</summary>
         private static string TrimVersion(string v)
         {
-            if (string.IsNullOrEmpty(v)) return "1.0.2";
+            if (string.IsNullOrEmpty(v)) return "1.0.5";
             var parts = v.Split('.');
             int keep = parts.Length;
             // 至少保留三段（主.次.修订），多于三段的尾部 0 全部去掉
@@ -572,7 +605,7 @@ namespace Xime.Acad
                 catch (System.Exception) { }
 
                 WriteStartupLog(string.Format(
-                    "  环境: AutoCAD {0} | Windows {1} | CLR {2} | 架构 {3}",
+                    "  环境: " + Compat.HostName + " {0} | Windows {1} | CLR {2} | 架构 {3}",
                     cadVer,
                     System.Environment.OSVersion.Version,
                     System.Environment.Version,

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Win32;
 
-namespace Xime.Acad
+namespace Xime.Plugin
 {
     /// <summary>
     /// AutoCAD 自动加载注册表读写。

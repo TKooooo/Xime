@@ -1,4 +1,4 @@
-{
+﻿{
   // ============================================================
   //  X输入法 —— 构建 / 验证 / 部署任务
   //
@@ -13,9 +13,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      // ---- 主构建：编译三套 TFM + 打包 + 生成安装说明 ----------------
+      // ---- 主构建：编译全部宿主的 TFM + 打包 + 生成安装说明 --------
       "label": "构建：完整构建并打包（build/build.sh）",
-      "detail": "编译 net35/net48/net8 三套目标框架，复制到 dist/，生成安装说明与 ApplicationPlugins 包。等价于 bash build/build.sh",
+      "detail": "编译 AutoCAD net35/net48/net8 + 中望 net48 + 浩辰 net8.0-windows，复制到 dist/，生成安装说明与 ApplicationPlugins 包。等价于 bash build/build.sh",
       "type": "shell",
       "command": "bash build/build.sh",
       "options": { "cwd": "${workspaceFolder}" },
@@ -25,7 +25,7 @@
     },
     {
       "label": "构建：清理全部产物（build/build.sh clean）",
-      "detail": "删除 dist/、build/acad/、build/core/",
+      "detail": "删除 dist/ 与 build/ 下 acad、core、zwcad、gstarcad 四个产物目录",
       "type": "shell",
       "command": "bash build/build.sh clean",
       "options": { "cwd": "${workspaceFolder}" },
@@ -40,6 +40,18 @@
       "command": "dotnet build src/Xime.Acad/Xime.Acad.csproj -c Debug --nologo",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$msCompile"
+    },
+    {
+      // ---- 中望 / 浩辰：独立编译（日常改插件层时用，比全量构建快）--------
+      //   插件层源码在 src/Xime.Plugin/，三套宿主共用；
+      //   改完想立刻看"另外两家是否还编得过"，跑这一个即可。
+      "label": "构建：编译 中望CAD + 浩辰CAD 插件（Release）",
+      "detail": "中望 net48（需中望安装目录）/ 浩辰 net8.0-windows（需浩辰安装目录）；SDK 位置默认按注册表自动定位，见 Directory.Build.props。",
+      "type": "shell",
+      "command": "dotnet build src/Xime.Zwcad/Xime.Zwcad.csproj -c Release --nologo; dotnet build src/Xime.GstarCad/Xime.GstarCad.csproj -c Release --nologo",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$msCompile",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
     },
 
     {
@@ -62,38 +74,38 @@
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
     },
     {
-      "label": "验证③：交付自查 check_v102.py（特征串正/反两面）",
+      "label": "验证③：交付自查 check_v103.py（特征串正/反两面）",
       "detail": "检查 dist/ 产物、版本资源、关键特征串。",
       "type": "shell",
-      "command": "python build/check_v102.py",
+      "command": "python build/check_v103.py",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
     },
     {
-      "label": "验证④：负向对照 _negctl_v102.py all（16 项）",
+      "label": "验证④：负向对照 _negctl_v103.py all（16 项）",
       "detail": "★ 故意逐项改坏源码，确认每条断言都恰好变红。会改源码再还原，跑完请核对 git status 干净。",
       "type": "shell",
-      "command": "python build/_negctl_v102.py all",
+      "command": "python build/_negctl_v103.py all",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
     },
     {
-      "label": "验证⑤：还原全部负向对照注入（_negctl_v102.py restore）",
+      "label": "验证⑤：还原全部负向对照注入（_negctl_v103.py restore）",
       "detail": "负向对照中途失败时用它兜底还原源码。",
       "type": "shell",
-      "command": "python build/_negctl_v102.py restore",
+      "command": "python build/_negctl_v103.py restore",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
 
     {
       // ---- 部署 ----------------------------------------------------
-      "label": "部署：deploy_v102.py（桌面交付目录 + 安装目录）",
-      "detail": "把 dist/net48 部署到桌面交付目录与 C:/X输入法/net48，并保留用户 140 条白名单。落盘前会自检 XML 合法性。",
+      "label": "部署：deploy_v103.py（桌面交付目录 + 安装目录）",
+      "detail": "把 dist/AutoCAD2013-2024 部署到桌面交付目录与插件安装目录，并保留用户 140 条白名单。落盘前会自检 XML 合法性。",
       "type": "shell",
-      "command": "python build/deploy_v102.py",
+      "command": "python build/deploy_v103.py",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
@@ -102,9 +114,9 @@
     {
       // ---- 界面预览 -------------------------------------------------
       "label": "预览：设置界面截图（XimeTest ui --shot）",
-      "detail": "改过界面文案后跑它，看新截图有没有裁切。输出到 build/ui_preview_v102.png。",
+      "detail": "改过界面文案后跑它，看新截图有没有裁切。输出到 build/ui_preview_v103.png。",
       "type": "shell",
-      "command": "./src/Xime.CliTest/bin/Release/net48/XimeTest.exe ui --shot build/ui_preview_v102.png",
+      "command": "./src/Xime.CliTest/bin/Release/net48/XimeTest.exe ui --shot build/ui_preview_v103.png",
       "options": { "cwd": "${workspaceFolder}" },
       "dependsOn": "验证①：编译 CliTest（XimeTest.exe）",
       "problemMatcher": []

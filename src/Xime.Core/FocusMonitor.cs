@@ -289,7 +289,59 @@ namespace Xime.Core
             // MFC 编辑控件（AfxWnd 系列，天正对话框常见）
             if (cls.StartsWith("AfxWnd", StringComparison.OrdinalIgnoreCase)) return true;
 
+            // ★★★ v62：WinForms 的文本控件 —— **必须认**，否则"打不进中文"。
+            //
+            //   事故现场（2026-10-14，用户报障）：「AutoCAD 下 layer 命令 - 新建图层 -
+            //   修改新建图层名称，修改图层名称时候无法切换到中文，手动也无法切换。」
+            //
+            //   实测窗口结构（本机 AutoCAD 2022，探针 `_research/watch_layer_edit.py`）：
+            //     焦点 = `WindowsForms10.EDIT.app.0.1a4f6bb_r57_ad1`
+            //            （标题「图层1」，尺寸 75x23）
+            //     父链 = [1..4] WindowsForms10.Window.8… →
+            //            [5] AfxWnd100u "Layer Palette" →
+            //            [6] AfxWnd100u "Layer" →
+            //            [7] AfxControlBar100u "Layer" （**独立顶层窗口**）
+            //
+            //   ★ 它**不以 "Edit" 开头**（前缀是 `WindowsForms10.`），所以旧判据把它
+            //     判成"不是编辑控件"。连锁反应：
+            //       · `OnFocusObjectChanged` 的 `isEdit && !isCommandLine` 不成立
+            //         ⇒ **不进文字编辑态** ⇒ `_commandLineNeedsEnglish` 保持 true
+            //         （空闲期由 `OnCommandEnded` / `ForceEnglish` 置起）；
+            //       · 键盘钩子于是把这个框里敲的**每个字母**都吞掉、改注入英文字母
+            //         ⇒ 中文打不进；手动把输入法切到中文也没用（字母照样被吞成英文）。
+            //
+            //   ★ 为什么不会影响命令栏：所有用到本判据的地方都是
+            //     `isEdit && !isCommandLine` 的**组合**（命令栏家族由
+            //     `HostTextFrame.IsCommandLineWindow` 先拦下 —— 实测命令栏输入框是
+            //     `HwndWrapper[DefaultDomain;;…]`，父链含 `CLI Palette`）。
+            //     WinForms 的 EDIT 即便出现在命令栏里，也会因为父链命中 CLI Palette
+            //     而被 `!isCommandLine` 排除掉 ⇒ 命令栏的英文接管分毫不动。
+            //
+            //   ★ 顺带把 WinForms 的富文本控件一起认上（AutoCAD 的多行文本编辑等）。
+            if (cls.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase)) return true;
+            if (cls.StartsWith("WindowsForms10.RICHEDIT", StringComparison.OrdinalIgnoreCase)) return true;
+
             return false;
+        }
+
+        /// <summary>
+        /// 按类名判断是否为 **WPF 控件宿主**（`HwndWrapper[…]`，v59）。
+        ///
+        /// ★ 为什么单独拎出来：`HwndWrapper` 是个**过于宽泛**的类名 ——
+        ///   AutoCAD 的命令栏**整个家族**都是它：
+        ///     · 命令栏输入控件本体（父链 `AfxWnd100u / CLI Palette`）
+        ///     · **命令自动完成下拉框**（带属主的顶层浮层，实测 320×68→320×214）
+        ///     · 信息中心 / 快速访问工具栏搜索框 / 文档切换条
+        ///     · `SystemResourceNotifyWindow` / `Hidden Window` 等 WPF 内务窗口
+        ///   而 `IsEditBoxClass` 把它们**一律**当成"文字编辑控件"。
+        ///   有了本判据，"被误判成编辑控件"之后才能识别出
+        ///   「这是 CAD 命令栏家族、闲置期一定是用户在敲命令」并抢回英文接管
+        ///   —— 见 `XimeEngine.ShouldReclaimEnglishForIdlePrompt`。
+        /// </summary>
+        public static bool IsWpfHostClass(string cls)
+        {
+            return !string.IsNullOrEmpty(cls)
+                && cls.IndexOf("HwndWrapper", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         /// <summary>取窗口类名（诊断用，取不到返回空串）。</summary>

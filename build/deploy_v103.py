@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
-"""把 v1.0.2「无感修订版」部署到「桌面交付目录」与「插件安装目录」。
+﻿# -*- coding: utf-8 -*-
+"""把 v1.0.5「无感修订版」部署到「桌面交付目录」与「插件安装目录」。
 
 ★ 关键点：
   1. **保留用户 140 条命令白名单**（那是用户资产，不属于"设置项"）。
@@ -23,7 +23,7 @@ from xml.sax.saxutils import escape, unescape
 # ★ 仓库根**自相对**（脚本在 <repo>/build/ 下）：
 #   不把某个人的绝对路径写死进仓库，clone 到任何位置都能跑。
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = ROOT + "/dist/net48"
+SRC = ROOT + "/dist/AutoCAD2013-2024"
 # 下面两个是"部署到哪儿"，天生是本机路径 —— 允许用环境变量覆盖，默认值即本机常用位置。
 INST = os.environ.get("XIME_INST_DIR", "C:/X输入法/net48")
 DESK = os.environ.get("XIME_DESK_DIR", "C:/Users/XJH/Desktop/X输入法测试_v102")
@@ -101,7 +101,7 @@ print("旧配置: ConfigVersion=%s Enabled=%s EnabledByUser=%s WorkMode=%s Comma
 if len(cmds) < 100:
     raise SystemExit("★ 白名单只读到 %d 条，明显不对 —— 终止，避免覆盖用户资产。" % len(cmds))
 
-# ── 2) 重建配置（格式 = XimeConfig.Save()，v1.0.2 无感修订版口径的注释）────
+# ── 2) 重建配置（格式 = XimeConfig.Save()，v1.0.5 无感修订版口径的注释）────
 L = []
 A = L.append
 A('<?xml version="1.0" encoding="utf-8"?>')

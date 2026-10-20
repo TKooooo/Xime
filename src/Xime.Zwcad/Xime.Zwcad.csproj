@@ -1,0 +1,84 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ============================================================
+     X输入法 —— 中望 CAD（ZWCAD）宿主插件
+
+     宿主 API 程序集（都在中望安装目录里，随软件一起装，无需额外 SDK）：
+       ZwManaged.dll       ApplicationServices / Runtime / EditorInput / Windows
+       ZwDatabaseMgd.dll   DatabaseServices
+
+     目标框架：中望官方 KB —— ZWCAD 2021~2025 的 .NET 插件用 .NET Framework 4.x 编译
+              （“ZWCAD2021-2025版本需要用NetFramework4.7编译”），2026 沿用同一代。
+              本机实测 ZwManaged.dll 的程序集元数据是 v4.0.30319（.NET Framework 4.x），
+              故用 net48（向下兼容 4.7）。
+
+     ★ 插件正文（XimeApplication / XimeCommands / Compat）**不在本目录**，
+       而是链接自 ../Xime.Plugin —— 三套宿主共用同一份源码，
+       本工程只负责"用哪个宿主的 API + 怎么注册自动加载"。
+    ============================================================
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Xime.Zwcad</AssemblyName>
+    <RootNamespace>Xime.Plugin</RootNamespace>
+    <Version>1.0.5</Version>
+    <!--
+      ★ AssemblyVersion 与 AutoCAD 版一样**恒为 1.0.0.0**：
+        程序集身份不随发版变化，避免同一会话里"两套 Xime 并存"（详见 Xime.Acad.csproj）。
+    -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.5.0</FileVersion>
+    <Company>影子</Company>
+    <Author>影子</Author>
+    <Product>X输入法</Product>
+    <Copyright>Copyright © 影子 2026</Copyright>
+    <Description>X输入法 - 中望CAD(ZWCAD) 平台输入法智能切换插件（无视输入法模式）</Description>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../build/zwcad/</BaseOutputPath>
+    <NoWarn>$(NoWarn);CS1591;CS0618;MSB3277;MSB3270</NoWarn>
+    <RunAnalyzers>false</RunAnalyzers>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <!-- Release 不产 PDB，保持交付一致性（与 Xime.Acad 同步） -->
+    <DebugType Condition="'$(Configuration)' == 'Debug'">portable</DebugType>
+    <DebugType Condition="'$(Configuration)' != 'Debug'">none</DebugType>
+
+    <!-- ★ 宿主编译符号：插件层共享源码靠它切到 ZwSoft.ZwCAD.* -->
+    <DefineConstants>$(DefineConstants);HOST_ZWCAD</DefineConstants>
+    <!-- 声明"本工程需要中望 CAD 的托管程序集"，供 Directory.Build.props 校验 -->
+    <XimeNeedsZwcadSdk>true</XimeNeedsZwcadSdk>
+
+    <ApplicationIcon>$(MSBuildThisFileDirectory)..\Xime.Core\Resources\XimeLogo.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <!-- ★★ 共享插件层源码（三宿主同一份），说明见 Xime.Acad.csproj -->
+  <ItemGroup>
+    <Compile Include="..\Xime.Plugin\**\*.cs" LinkBase="Plugin" />
+  </ItemGroup>
+
+  <!-- 中望 CAD 托管程序集
+       ★ Copy Local = false（Private=false）：运行时由 ZWCAD 本体提供，
+         打进输出目录反而可能与宿主自带的版本冲突。 -->
+  <ItemGroup>
+    <Reference Include="ZwManaged">
+      <HintPath>$(ZwcadRefDir)\ZwManaged.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ZwDatabaseMgd">
+      <HintPath>$(ZwcadRefDir)\ZwDatabaseMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xime.Core\Xime.Core.csproj" />
+  </ItemGroup>
+
+</Project>
